@@ -17,27 +17,47 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 const handleGeminiError = (error: unknown): Error => {
+    let message = "An unknown error occurred.";
+    
     if (error instanceof Error) {
-        const message = error.message.toLowerCase();
-        if (message.includes('api key not valid') || message.includes('api_key_invalid')) {
-            return new Error("Invalid API Key. Please ensure your API key is correctly configured and enabled.");
+        message = error.message;
+    } else if (typeof error === 'object' && error !== null) {
+        try {
+            // Attempt to stringify object errors or extract a message property
+            if ((error as any).message) {
+                message = (error as any).message;
+            } else {
+                message = JSON.stringify(error);
+            }
+        } catch (e) {
+            message = String(error);
         }
-        if (message.includes('quota')) {
-            return new Error("API quota exceeded. Please check your Google Cloud project billing and quota settings.");
-        }
-        if (message.includes('request payload size exceeds')) {
-            return new Error("The audio file is too large to be processed. Please try a smaller file.");
-        }
-        if (message.includes('deadline exceeded')) {
-            return new Error("The request timed out. This may be due to a large file or slow network. Please try again.");
-        }
-        if (message.includes('fetch')) {
-            return new Error("A network error occurred. Please check your internet connection and try again.");
-        }
-        // Return a slightly cleaner version of the original error
-        return new Error(`An unexpected error occurred: ${error.message}`);
+    } else {
+        message = String(error);
     }
-    return new Error("An unknown error occurred.");
+    
+    const lowerMessage = message.toLowerCase();
+
+    if (lowerMessage.includes('api key not valid') || lowerMessage.includes('api_key_invalid')) {
+        return new Error("Invalid API Key. Please ensure your API key is correctly configured and enabled.");
+    }
+    if (lowerMessage.includes('quota') || lowerMessage.includes('429')) {
+        return new Error("API quota exceeded. Please check your Google Cloud project billing and quota settings.");
+    }
+    if (lowerMessage.includes('request payload size exceeds') || lowerMessage.includes('413')) {
+        return new Error("The audio file (or chunk) is too large for the API. Try reducing chunk size or disabling audio processing.");
+    }
+    if (lowerMessage.includes('deadline exceeded')) {
+        return new Error("The request timed out. This may be due to a large file or slow network. Please try again.");
+    }
+    if (lowerMessage.includes('fetch') || lowerMessage.includes('network')) {
+        return new Error("A network error occurred. Please check your internet connection and try again.");
+    }
+    if (lowerMessage.includes('[object object]')) {
+         return new Error(`An unexpected error structure occurred: ${message}`);
+    }
+
+    return new Error(message);
 };
 
 // Helper to safely get the API Key
@@ -177,17 +197,22 @@ CẤU TRÚC BIÊN BẢN VÀ HƯỚNG DẪN CHI TIẾT:
 A. THÔNG TIN CHUNG
 (Điền đầy đủ: Thời gian, Địa điểm, Thành phần tham dự, Chủ trì, Thư ký, Mục đích).
 
-B. NỘI DUNG CHI TIẾT & THẢO LUẬN (ĐÂY LÀ PHẦN QUAN TRỌNG NHẤT - CẦN LÀM RẤT KỸ)
-Tuyệt đối không viết tóm tắt kiểu gạch đầu dòng ngắn cũn cỡn. Với mỗi vấn đề được nêu ra trong cuộc họp, bạn phải triển khai thành một mục riêng và thực hiện theo quy trình sau:
+B. NỘI DUNG CHI TIẾT & THẢO LUẬN (PHẦN CỐT LÕI - YÊU CẦU ĐỘ CHI TIẾT CỰC ĐẠI)
+Đây là linh hồn của biên bản. Không được viết tóm tắt hời hợt. Hãy thuật lại diễn biến cuộc họp thật chi tiết, cụ thể như sau:
 
-1.  **Vấn đề / Chủ đề:** Đặt tiêu đề rõ ràng cho vấn đề đang bàn.
-2.  **Bối cảnh/Thực trạng:** Người trình bày đã nêu lên tình hình gì? Dữ liệu hoặc thông tin nền tảng là gì?
-3.  **Diễn biến thảo luận (Phải cực kỳ chi tiết):**
-    -   Ai đã đưa ra ý kiến gì? (Trích dẫn gián tiếp hoặc trực tiếp các ý quan trọng).
-    -   Có những tranh luận, phản biện hay bổ sung nào không? Hãy mô tả lại luồng tranh luận (Người A nói X, Người B phản đối vì Y...).
-    -   Phân tích các luận điểm chính: Tại sao họ lại đề xuất như vậy? Ưu/nhược điểm được mổ xẻ là gì?
-    -   *Yêu cầu:* Viết thành các đoạn văn mạch lạc, mô tả sâu sắc diễn biến tâm lý và lập luận của cuộc họp.
-4.  **Thống nhất / Kết luận của vấn đề đó:** Cuối cùng, chủ tọa hoặc mọi người đã chốt lại điều gì cho vấn đề này?
+Với mỗi chủ đề/vấn đề được đưa ra, hãy cấu trúc thành một mục riêng biệt:
+1.  **Tiêu đề vấn đề:** (Ngắn gọn, bao quát).
+2.  **Bối cảnh & Thông tin đầu vào:**
+    -   Ai là người nêu vấn đề?
+    -   Họ cung cấp dữ liệu, con số, hay tình hình thực tế nào? (Ghi lại chi tiết các con số nếu có).
+3.  **Diễn biến thảo luận (Yêu cầu tường thuật kỹ lưỡng):**
+    -   **Luồng ý kiến:** Mô tả trình tự: Người A nói gì -> Người B phản đối/đồng tình ra sao -> Người C bổ sung ý gì.
+    -   **Lập luận & Đối đáp:** Đừng chỉ ghi "mọi người thảo luận sôi nổi". Hãy ghi rõ: Ông X lo ngại về rủi ro tài chính, nhưng Bà Y khẳng định đây là cơ hội đầu tư.
+    -   **Trích dẫn:** Cố gắng trích dẫn ý chính hoặc câu nói đắt giá của người nói để tăng tính xác thực.
+    -   **Phân tích:** Làm rõ các mâu thuẫn hoặc các khía cạnh đa chiều của vấn đề được mổ xẻ.
+4.  **Kết luận/Chốt vấn đề:**
+    -   Quyết định cuối cùng là gì?
+    -   Ai là người đưa ra quyết định chốt?
 
 C. KẾT LUẬN CHUNG & CHỈ ĐẠO
 -   Tóm tắt lại các quyết định mang tính chiến lược.

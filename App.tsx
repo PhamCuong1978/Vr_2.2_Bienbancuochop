@@ -67,7 +67,9 @@ export interface SavedSession {
 }
 
 const HISTORY_KEY = 'gemini_meeting_minutes_history';
-const CHUNK_SIZE = 100 * 1024 * 1024; // 100MB
+// Reduced chunk size to 6MB to prevent "Array buffer allocation failed" and ensure processed WAVs fits in API limit.
+// 6MB MP3 ~ 11MB WAV (16kHz mono) ~ 15MB Base64. Safe for Gemini API (20MB limit).
+const CHUNK_SIZE = 6 * 1024 * 1024; 
 
 const App: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'file' | 'live' | 'history'>('file');
@@ -308,6 +310,13 @@ const App: React.FC = () => {
                         }
 
                         if (cancelRequestRef.current) break;
+                        
+                         // Check if file size is safe for inline usage (approx 20MB limit for Gemini inline)
+                        // Note: Base64 overhead adds ~33%. 15MB file -> 20MB Base64.
+                        if (fileToProcess.size > 15 * 1024 * 1024) {
+                             throw new Error("File chunk is too large for the API after processing. Please try smaller files or disable audio pre-processing.");
+                        }
+
                         setStatusMessage(`Sending ${item.file.name} to Gemini...`);
                         
                         // Small delay to let UI update
@@ -328,8 +337,11 @@ const App: React.FC = () => {
 
                 } catch (itemError: any) {
                     console.error(`Error processing item ${item.id}:`, itemError);
+                    let errMsg = itemError.message || "An unknown error occurred.";
+                    if (errMsg === "[object Object]") errMsg = "API Error (Unknown Format)";
+
                     setFileQueue(prev => prev.map(q => 
-                        q.id === item.id ? { ...q, status: 'error', errorMsg: itemError.message } : q
+                        q.id === item.id ? { ...q, status: 'error', errorMsg: errMsg } : q
                     ));
                     // We continue to the next item even if one fails
                 }
