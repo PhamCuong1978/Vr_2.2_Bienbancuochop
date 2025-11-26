@@ -51,10 +51,9 @@ const TranscriptionMerger: React.FC<TranscriptionMergerProps> = ({ queue, onMerg
         setPreviewIds(newSet);
     };
 
-    const handleMerge = () => {
+    const mergeItems = (itemsToMerge: QueueItem[]) => {
         // Sort items by their original part index to maintain logical order
-        const sortedSelection = completedItems
-            .filter(item => selectedIds.has(item.id))
+        const sortedSelection = itemsToMerge
             .sort((a, b) => {
                 // Primary sort: Original name
                 if (a.originalName !== b.originalName) return a.originalName.localeCompare(b.originalName);
@@ -67,6 +66,20 @@ const TranscriptionMerger: React.FC<TranscriptionMergerProps> = ({ queue, onMerg
             .join('\n\n');
 
         onMerge(mergedText);
+    };
+
+    const handleMergeSelected = () => {
+        const selectedItems = completedItems.filter(item => selectedIds.has(item.id));
+        mergeItems(selectedItems);
+    };
+
+    const handleSelectAllAndMerge = () => {
+        // Visually select all items
+        const allIds = new Set(completedItems.map(item => item.id));
+        setSelectedIds(allIds);
+        
+        // Merge all items immediately
+        mergeItems(completedItems);
     };
 
     if (completedItems.length === 0) return null;
@@ -116,14 +129,21 @@ const TranscriptionMerger: React.FC<TranscriptionMergerProps> = ({ queue, onMerg
                 ))}
             </div>
 
-            <div className="pt-2 border-t border-gray-600">
-                <button
-                    onClick={handleMerge}
-                    disabled={selectedIds.size === 0}
-                    className="w-full flex justify-center items-center space-x-2 bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed"
+            <div className="pt-2 border-t border-gray-600 flex flex-col sm:flex-row gap-3">
+                 <button
+                    onClick={handleSelectAllAndMerge}
+                    className="w-full sm:flex-1 flex justify-center items-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition-colors"
                 >
                     <CheckIcon className="w-5 h-5" />
-                    <span>Gộp các file đã chọn & Tiếp tục</span>
+                    <span>Chọn tất cả & Tiếp tục</span>
+                </button>
+                <button
+                    onClick={handleMergeSelected}
+                    disabled={selectedIds.size === 0}
+                    className="w-full sm:flex-1 flex justify-center items-center space-x-2 bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed"
+                >
+                    <CheckIcon className="w-5 h-5" />
+                    <span>Gộp đã chọn ({selectedIds.size}) & Tiếp tục</span>
                 </button>
             </div>
         </div>
