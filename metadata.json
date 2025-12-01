@@ -1,5 +1,5 @@
 {
-  "name": "Vr_2.1_Bienbancuochop",
+  "name": "Vr_2.2_Bienbancuochop",
   "description": "A web application to transcribe audio files into text using the Google Gemini API. Upload an audio file, and the app will generate a text transcription.",
   "requestFramePermissions": [
     "microphone"
