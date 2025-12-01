@@ -16,6 +16,7 @@ import SpeakerNamer from './components/SpeakerNamer';
 import SavedSessionsList from './components/SavedSessionsList';
 import FileQueueList, { QueueItem } from './components/FileQueueList';
 import TranscriptionMerger from './components/TranscriptionMerger';
+import CloudStorage from './components/CloudStorage';
 
 // Helper function to extract the topic from the generated HTML
 const extractTopicFromHtml = (htmlContent: string): string | null => {
@@ -95,6 +96,8 @@ export interface SavedSession {
 }
 
 const HISTORY_KEY = 'gemini_meeting_minutes_history';
+const ARCHIVE_KEY = 'gemini_meeting_minutes_archive';
+
 // Reduced chunk size to 6MB to prevent "Array buffer allocation failed" and ensure processed WAVs fits in API limit.
 // 6MB MP3 ~ 11MB WAV (16kHz mono) ~ 15MB Base64. Safe for Gemini API (20MB limit).
 const CHUNK_SIZE = 6 * 1024 * 1024; 
@@ -103,7 +106,7 @@ const App: React.FC = () => {
     // Key used to force full component remount on refresh
     const [refreshKey, setRefreshKey] = useState(0);
 
-    const [activeTab, setActiveTab] = useState<'file' | 'live' | 'history'>('file');
+    const [activeTab, setActiveTab] = useState<'file' | 'live' | 'history' | 'cloud'>('file');
     
     // Replaced simple file list with a Queue System
     const [fileQueue, setFileQueue] = useState<QueueItem[]>([]);
@@ -146,6 +149,7 @@ const App: React.FC = () => {
     const [diarizationProgress, setDiarizationProgress] = useState(0);
 
     const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+    const [archivedSessions, setArchivedSessions] = useState<SavedSession[]>([]);
     const [previewSession, setPreviewSession] = useState<SavedSession | null>(null);
 
     const cancelRequestRef = useRef<boolean>(false);
@@ -157,6 +161,10 @@ const App: React.FC = () => {
             const savedHistory = localStorage.getItem(HISTORY_KEY);
             if (savedHistory) {
                 setSavedSessions(JSON.parse(savedHistory));
+            }
+            const savedArchive = localStorage.getItem(ARCHIVE_KEY);
+            if (savedArchive) {
+                setArchivedSessions(JSON.parse(savedArchive));
             }
         } catch (error) {
             console.error("Failed to load history from localStorage", error);
@@ -171,6 +179,15 @@ const App: React.FC = () => {
             console.error("Failed to save history to localStorage", error);
         }
     }, [savedSessions]);
+    
+    // Save archive to localStorage
+    useEffect(() => {
+        try {
+            localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archivedSessions));
+        } catch (error) {
+            console.error("Failed to save archive to localStorage", error);
+        }
+    }, [archivedSessions]);
 
     const resetState = () => {
         setError(null);
@@ -276,7 +293,8 @@ const App: React.FC = () => {
     };
 
     const handleLoadSession = (sessionId: string) => {
-        const sessionToLoad = savedSessions.find(s => s.id === sessionId);
+        // Try finding in both local and archive
+        const sessionToLoad = savedSessions.find(s => s.id === sessionId) || archivedSessions.find(s => s.id === sessionId);
         if (sessionToLoad) {
             resetState();
             setFinalTranscription(sessionToLoad.transcription);
@@ -294,6 +312,44 @@ const App: React.FC = () => {
     const handleDeleteSession = (sessionId: string) => {
         if (window.confirm("Bạn có chắc chắn muốn xóa phiên đã lưu này không? Hành động này không thể hoàn tác.")) {
              setSavedSessions(prev => prev.filter(s => s.id !== sessionId));
+        }
+    };
+    
+    const handleDeleteArchivedSession = (sessionId: string) => {
+         if (window.confirm("CẢNH BÁO: Bạn sắp xóa vĩnh viễn khỏi kho lưu trữ. Hành động này không thể hoàn tác. Bạn có chắc chắn không?")) {
+             setArchivedSessions(prev => prev.filter(s => s.id !== sessionId));
+        }
+    };
+
+    const handleArchiveSession = (sessionId: string) => {
+        const session = savedSessions.find(s => s.id === sessionId);
+        if (session) {
+            setArchivedSessions(prev => [session, ...prev]);
+            setSavedSessions(prev => prev.filter(s => s.id !== sessionId));
+            // Optional: Provide visual feedback
+            alert("Đã chuyển biên bản sang kho lưu trữ 'Cloud' thành công.");
+        }
+    };
+    
+    const handleImportDatabase = async (file: File) => {
+        try {
+            const text = await file.text();
+            const importedData = JSON.parse(text) as SavedSession[];
+            if (Array.isArray(importedData)) {
+                // Merge strategies:
+                // 1. Overwrite? No, risky.
+                // 2. Append unique items based on ID? Yes.
+                const currentIds = new Set(archivedSessions.map(s => s.id));
+                const newItems = importedData.filter(s => !currentIds.has(s.id));
+                
+                setArchivedSessions(prev => [...newItems, ...prev]);
+                alert(`Đã khôi phục thành công ${newItems.length} biên bản.`);
+            } else {
+                alert("File không hợp lệ. Vui lòng chọn file JSON được xuất từ ứng dụng này.");
+            }
+        } catch (e) {
+            console.error("Import failed", e);
+            alert("Lỗi khi đọc file. File có thể bị hỏng hoặc sai định dạng.");
         }
     };
 
@@ -682,7 +738,7 @@ const App: React.FC = () => {
         }, 100);
     };
 
-    const TabButton: React.FC<{ tabName: 'file' | 'live' | 'history'; children: React.ReactNode }> = ({ tabName, children }) => (
+    const TabButton: React.FC<{ tabName: 'file' | 'live' | 'history' | 'cloud'; children: React.ReactNode }> = ({ tabName, children }) => (
         <button
             onClick={() => setActiveTab(tabName)}
             disabled={isBusy}
@@ -726,10 +782,11 @@ const App: React.FC = () => {
                             <span className="px-2 py-0.5 rounded text-xs font-mono bg-gray-700 text-gray-300">v2.2</span>
                         </div>
                         
-                        <div className="flex border-b border-gray-700 bg-gray-900/30">
+                        <div className="flex border-b border-gray-700 bg-gray-900/30 overflow-x-auto">
                            <TabButton tabName="file">Upload Files</TabButton>
                            <TabButton tabName="live">Live Audio</TabButton>
                            <TabButton tabName="history">History</TabButton>
+                           <TabButton tabName="cloud">Cloud / Archive</TabButton>
                         </div>
 
                         <div className="p-6 sm:p-8 bg-gray-800 transition-all">
@@ -745,13 +802,23 @@ const App: React.FC = () => {
                                 </div>
                             ) : activeTab === 'live' ? (
                                 <LiveTranscription onComplete={handleLiveTranscriptionComplete} disabled={isBusy} />
-                            ) : (
+                            ) : activeTab === 'history' ? (
                                 <SavedSessionsList
                                     sessions={savedSessions}
                                     onLoad={handleLoadSession}
                                     onDelete={handleDeleteSession}
+                                    onArchive={handleArchiveSession}
                                     onPreview={handlePreviewSession}
                                     onImport={handleImportSession}
+                                    disabled={isBusy}
+                                />
+                            ) : (
+                                <CloudStorage
+                                    sessions={archivedSessions}
+                                    onLoad={handleLoadSession}
+                                    onDelete={handleDeleteArchivedSession}
+                                    onPreview={handlePreviewSession}
+                                    onImportDatabase={handleImportDatabase}
                                     disabled={isBusy}
                                 />
                             )}

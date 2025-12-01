@@ -1,18 +1,19 @@
 
 import React, { useRef } from 'react';
 import { SavedSession } from '../App';
-import { TrashIcon, EyeIcon, DownloadIcon, ImportIcon } from './icons';
+import { TrashIcon, EyeIcon, DownloadIcon, ImportIcon, ArchiveBoxIcon } from './icons';
 
 interface SavedSessionsListProps {
     sessions: SavedSession[];
     onLoad: (sessionId: string) => void;
     onDelete: (sessionId: string) => void;
+    onArchive?: (sessionId: string) => void;
     onPreview: (session: SavedSession) => void;
     onImport: (files: File[]) => void;
     disabled: boolean;
 }
 
-const SavedSessionsList: React.FC<SavedSessionsListProps> = ({ sessions, onLoad, onDelete, onPreview, onImport, disabled }) => {
+const SavedSessionsList: React.FC<SavedSessionsListProps> = ({ sessions, onLoad, onDelete, onArchive, onPreview, onImport, disabled }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleDownload = (session: SavedSession) => {
@@ -88,7 +89,6 @@ const SavedSessionsList: React.FC<SavedSessionsListProps> = ({ sessions, onLoad,
                                     title="Xem trước biên bản (HTML)"
                                 >
                                     <EyeIcon className="w-4 h-4" />
-                                    <span>Xem</span>
                                 </button>
                                 <button
                                     onClick={() => handleDownload(session)}
@@ -97,8 +97,17 @@ const SavedSessionsList: React.FC<SavedSessionsListProps> = ({ sessions, onLoad,
                                     title="Tải về biên bản (HTML)"
                                 >
                                     <DownloadIcon className="w-4 h-4" />
-                                    <span>Tải về</span>
                                 </button>
+                                {onArchive && (
+                                    <button
+                                        onClick={() => onArchive(session.id)}
+                                        disabled={disabled}
+                                        className="w-full sm:w-auto px-3 py-2 text-sm bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 disabled:bg-gray-500 transition-colors flex items-center justify-center gap-1"
+                                        title="Chuyển sang Lưu trữ vĩnh viễn"
+                                    >
+                                        <ArchiveBoxIcon className="w-4 h-4" />
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => onLoad(session.id)}
                                     disabled={disabled}
