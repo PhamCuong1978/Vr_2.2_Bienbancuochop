@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, Modality, FunctionDeclaration, Type, Chat } from "@google/genai";
 import { MeetingDetails } from "../components/MeetingMinutesGenerator";
 import { ProcessingOptions } from "../components/Options";
 
@@ -365,3 +365,87 @@ export const liveTranscriptionSession = async (callbacks: any) => {
         }
     });
 }
+
+// --- Chat Assistant Functions ---
+
+// Tools Definition
+const listHistoryTool: FunctionDeclaration = {
+    name: "list_history",
+    description: "Get a list of all saved meeting sessions in the history.",
+};
+
+const listArchiveTool: FunctionDeclaration = {
+    name: "list_archive",
+    description: "Get a list of all archived meeting sessions (Cloud storage).",
+};
+
+const loadSessionTool: FunctionDeclaration = {
+    name: "load_session",
+    description: "Load a specific meeting session from history or archive into the main view.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            sessionId: { type: Type.STRING, description: "The ID of the session to load." },
+        },
+        required: ["sessionId"],
+    },
+};
+
+const archiveSessionTool: FunctionDeclaration = {
+    name: "archive_session",
+    description: "Move a session from History to Archive (Cloud storage).",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            sessionId: { type: Type.STRING, description: "The ID of the session to archive." },
+        },
+        required: ["sessionId"],
+    },
+};
+
+const editCurrentMinutesTool: FunctionDeclaration = {
+    name: "edit_current_minutes",
+    description: "Edit the currently displayed meeting minutes (HTML) based on user instructions.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            instruction: { type: Type.STRING, description: "The detailed instruction for editing the minutes." },
+        },
+        required: ["instruction"],
+    },
+};
+
+export const startChatSession = (history: any[] = []) => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("API_KEY not configured");
+    const ai = new GoogleGenAI({ apiKey });
+    
+    // Create chat with tools
+    return ai.chats.create({
+        model: "gemini-2.5-flash",
+        history: history,
+        config: {
+            tools: [{ 
+                functionDeclarations: [
+                    listHistoryTool, 
+                    listArchiveTool, 
+                    loadSessionTool, 
+                    archiveSessionTool,
+                    editCurrentMinutesTool
+                ] 
+            }],
+            systemInstruction: `Bạn là "AI của anh Cường", một trợ lý ảo thông minh tích hợp trong ứng dụng "Gemini Meeting Assistant".
+Nhiệm vụ của bạn là hỗ trợ người dùng quản lý biên bản cuộc họp.
+Bạn có QUYỀN KIỂM SOÁT ỨNG DỤNG thông qua các công cụ (tools) được cung cấp.
+
+Quy tắc:
+1. Luôn xưng hô là "AI của anh Cường" hoặc "em".
+2. Trả lời ngắn gọn, súc tích, thân thiện.
+3. Khi người dùng yêu cầu thực hiện hành động (ví dụ: "Mở biên bản họp Marketing"), hãy sử dụng tool tương ứng.
+4. Nếu cần thông tin (ví dụ: ID của phiên họp), hãy gọi tool 'list_history' hoặc 'list_archive' trước để tìm, sau đó mới gọi tool hành động.
+5. Nếu người dùng hỏi "Anh muốn gì ở em", hãy trả lời hài hước một chút nhưng vẫn chuyên nghiệp.
+
+Dữ liệu hiện tại của ứng dụng sẽ được cung cấp qua context mỗi khi bạn được gọi.`,
+        }
+    });
+};

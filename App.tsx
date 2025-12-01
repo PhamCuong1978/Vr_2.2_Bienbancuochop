@@ -17,6 +17,7 @@ import SavedSessionsList from './components/SavedSessionsList';
 import FileQueueList, { QueueItem } from './components/FileQueueList';
 import TranscriptionMerger from './components/TranscriptionMerger';
 import CloudStorage from './components/CloudStorage';
+import ChatAssistant from './components/ChatAssistant';
 
 // Helper function to extract the topic from the generated HTML
 const extractTopicFromHtml = (htmlContent: string): string | null => {
@@ -292,7 +293,7 @@ const App: React.FC = () => {
         }
     };
 
-    const handleLoadSession = (sessionId: string) => {
+    const handleLoadSession = useCallback((sessionId: string) => {
         // Try finding in both local and archive
         const sessionToLoad = savedSessions.find(s => s.id === sessionId) || archivedSessions.find(s => s.id === sessionId);
         if (sessionToLoad) {
@@ -302,8 +303,10 @@ const App: React.FC = () => {
             setLastMeetingDetails(sessionToLoad.meetingDetails);
             setFileQueue([]); // Clear file queue
             setActiveTab('file'); // Switch back to the main view
+            return true;
         }
-    };
+        return false;
+    }, [savedSessions, archivedSessions]);
     
     const handlePreviewSession = (session: SavedSession) => {
         setPreviewSession(session);
@@ -321,24 +324,21 @@ const App: React.FC = () => {
         }
     };
 
-    const handleArchiveSession = (sessionId: string) => {
+    const handleArchiveSession = useCallback((sessionId: string) => {
         const session = savedSessions.find(s => s.id === sessionId);
         if (session) {
             setArchivedSessions(prev => [session, ...prev]);
             setSavedSessions(prev => prev.filter(s => s.id !== sessionId));
-            // Optional: Provide visual feedback
-            alert("Đã chuyển biên bản sang kho lưu trữ 'Cloud' thành công.");
+            return true;
         }
-    };
+        return false;
+    }, [savedSessions]);
     
     const handleImportDatabase = async (file: File) => {
         try {
             const text = await file.text();
             const importedData = JSON.parse(text) as SavedSession[];
             if (Array.isArray(importedData)) {
-                // Merge strategies:
-                // 1. Overwrite? No, risky.
-                // 2. Append unique items based on ID? Yes.
                 const currentIds = new Set(archivedSessions.map(s => s.id));
                 const newItems = importedData.filter(s => !currentIds.has(s.id));
                 
@@ -355,7 +355,6 @@ const App: React.FC = () => {
 
     const handleImportSession = async (files: File[]) => {
         const newSessions: SavedSession[] = [];
-        
         for (const file of files) {
             try {
                 const text = await file.text();
@@ -373,10 +372,8 @@ const App: React.FC = () => {
                 newSessions.push(newSession);
             } catch (err) {
                 console.error("Error parsing imported file:", file.name, err);
-                alert(`Không thể đọc file: ${file.name}`);
             }
         }
-        
         if (newSessions.length > 0) {
             setSavedSessions(prev => [...newSessions, ...prev]);
         }
@@ -394,8 +391,6 @@ const App: React.FC = () => {
         setIsLoading(true);
         cancelRequestRef.current = false;
         resetState();
-        // Do NOT reset finalTranscription here, user might be appending. 
-        // Actually, usually user processes then merges. Let's clear any previous merge result to avoid confusion.
         setFinalTranscription(''); 
         setError(null);
 
@@ -404,15 +399,12 @@ const App: React.FC = () => {
                 const item = itemsToProcess[i];
                 if (cancelRequestRef.current) break;
 
-                // Update UI to show processing
                 setFileQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'processing', errorMsg: undefined } : q));
                 setStatusMessage(`Processing file ${i + 1}/${itemsToProcess.length}: ${item.file.name}`);
                 setProgress(((i) / itemsToProcess.length) * 100);
 
                 try {
                     let resultText = '';
-                    
-                    // Check for HTML files based on MIME type or extension
                     const isHtml = item.file.type === 'text/html' || item.file.name.toLowerCase().endsWith('.html') || item.file.name.toLowerCase().endsWith('.htm');
 
                     if (isHtml) {
@@ -420,15 +412,12 @@ const App: React.FC = () => {
                         const htmlContent = await item.file.text();
                         const tempDiv = document.createElement('div');
                         tempDiv.innerHTML = htmlContent;
-                        // Extract plain text
                         resultText = tempDiv.textContent || tempDiv.innerText || "";
-                        // Normalize whitespace (optional, but good for cleaning up extraction artifacts)
                         resultText = resultText.replace(/\s+/g, ' ').trim();
                     } else if (item.file.type.startsWith('text/') || item.file.name.toLowerCase().endsWith('.txt') || item.file.name.toLowerCase().endsWith('.md')) {
                         resultText = await item.file.text();
                     } else if (item.file.type.startsWith('audio/')) {
                         let fileToProcess = item.file;
-                        // Exclude identifySpeakers from audio pre-processing checks (it's an API option, not an audio DSP option)
                         const { identifySpeakers, ...audioOptions } = processingOptions;
                         const isAnyAudioOptionEnabled = Object.values(audioOptions).some(option => option === true);
 
@@ -438,24 +427,17 @@ const App: React.FC = () => {
                                 fileToProcess = await processAudio(item.file, processingOptions);
                             } catch (conversionError: any) {
                                 console.warn(`Audio processing failed for ${item.file.name}, proceeding with original file. Error:`, conversionError);
-                                // Fallback to original
                             }
                         }
 
                         if (cancelRequestRef.current) break;
                         
-                         // Check if file size is safe for inline usage (approx 20MB limit for Gemini inline)
-                        // Note: Base64 overhead adds ~33%. 15MB file -> 20MB Base64.
                         if (fileToProcess.size > 15 * 1024 * 1024) {
                              throw new Error("File chunk is too large for the API after processing. Please try smaller files or disable audio pre-processing.");
                         }
 
                         setStatusMessage(`Sending ${item.file.name} to Gemini...`);
-                        
-                        // Small delay to let UI update
                         await new Promise(res => setTimeout(res, 100));
-                        
-                        // Pass options to transcribeAudio
                         resultText = await transcribeAudio(fileToProcess, selectedModel, processingOptions);
                     } else {
                          resultText = `[Skipped unsupported file type: ${item.file.type}]`;
@@ -463,7 +445,6 @@ const App: React.FC = () => {
 
                     if (cancelRequestRef.current) break;
 
-                    // Update success state
                     setFileQueue(prev => prev.map(q => 
                         q.id === item.id ? { ...q, status: 'completed', transcription: resultText } : q
                     ));
@@ -476,7 +457,6 @@ const App: React.FC = () => {
                     setFileQueue(prev => prev.map(q => 
                         q.id === item.id ? { ...q, status: 'error', errorMsg: errMsg } : q
                     ));
-                    // We continue to the next item even if one fails
                 }
             }
             
@@ -494,7 +474,6 @@ const App: React.FC = () => {
 
     const handleMergeTranscription = (mergedText: string) => {
         setFinalTranscription(mergedText);
-        // Scroll to the result area
         setTimeout(() => {
             const el = document.getElementById('transcription-result-area');
             if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -617,12 +596,15 @@ const App: React.FC = () => {
             setEditError("Cannot request edits without an existing transcription, generated minutes, and meeting details.");
             return;
         }
+        // Force scroll to edit area
+        const el = document.getElementById('transcription-result-area');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
 
         setIsEditingMinutes(true);
         cancelRequestRef.current = false;
         setEditError(null);
         setEditProgress(0);
-        setEditStatusMessage('Initializing edit...');
+        setEditStatusMessage('AI Agent is applying your edits...');
 
         const intervalId = window.setInterval(() => {
             if (cancelRequestRef.current) {
@@ -635,13 +617,12 @@ const App: React.FC = () => {
                     clearInterval(intervalId);
                     return 95;
                 }
-                if (next < 30) setEditStatusMessage('Processing your request...');
-                else if (next < 80) setEditStatusMessage('Applying changes...');
-                else setEditStatusMessage('Finalizing new version...');
+                if (next < 30) setEditStatusMessage('Processing request...');
+                else if (next < 80) setEditStatusMessage('Rewriting document...');
+                else setEditStatusMessage('Finalizing...');
                 return next;
             });
         }, 500);
-
 
         try {
             const resultHtml = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, editText, selectedModel);
@@ -649,12 +630,11 @@ const App: React.FC = () => {
             if (cancelRequestRef.current) return;
 
             setEditProgress(100);
-            setEditStatusMessage('✅ Edits applied successfully!');
+            setEditStatusMessage('✅ Edits applied!');
             await new Promise(res => setTimeout(res, 800));
 
             setMeetingMinutesHtml(resultHtml);
 
-            // Save edited version as a new session
             const extractedTopic = extractTopicFromHtml(resultHtml);
             const sessionTopic = extractedTopic || lastMeetingDetails.topic || 'Biên bản không có tiêu đề';
             
@@ -679,6 +659,7 @@ const App: React.FC = () => {
         }
     }, [finalTranscription, meetingMinutesHtml, selectedModel, lastMeetingDetails]);
 
+
     const isBusy = isLoading || isGeneratingMinutes || isEditingMinutes || isDiarizing;
     const selectedCount = fileQueue.filter(i => i.isSelected && i.status !== 'completed').length;
     // Check if we have processed files ready for merging
@@ -697,7 +678,6 @@ const App: React.FC = () => {
             cancelRequestRef.current = true;
         }
 
-        // Reset all state
         setFileQueue([]);
         setFinalTranscription('');
         setMeetingMinutesHtml('');
@@ -719,7 +699,6 @@ const App: React.FC = () => {
         setDiarizationProgress(0);
         setActiveTab('file');
 
-        // Reset options to default
          setProcessingOptions({
             convertToMono16kHz: true,
             noiseReduction: true,
@@ -728,11 +707,7 @@ const App: React.FC = () => {
             identifySpeakers: true,
         });
         setSelectedModel('gemini-2.5-pro');
-        
-        // Force remount of components
         setRefreshKey(prev => prev + 1);
-        
-        // Reset cancel ref after a short delay
         setTimeout(() => {
             cancelRequestRef.current = false;
         }, 100);
@@ -747,6 +722,40 @@ const App: React.FC = () => {
             {children}
         </button>
     );
+
+    // --- AI Assistant Tool Execution Logic ---
+    const handleAiAction = useCallback(async (actionName: string, args: any) => {
+        switch (actionName) {
+            case 'list_history':
+                return savedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
+            case 'list_archive':
+                return archivedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
+            case 'load_session':
+                const success = handleLoadSession(args.sessionId);
+                return success ? "Session loaded successfully." : "Session not found.";
+            case 'archive_session':
+                const archived = handleArchiveSession(args.sessionId);
+                return archived ? "Session moved to archive." : "Session not found.";
+            case 'edit_current_minutes':
+                if (!finalTranscription || !meetingMinutesHtml) {
+                    return "Error: No active meeting minutes to edit. Please load a session first.";
+                }
+                // Trigger the edit function
+                await handleRequestEdits(args.instruction);
+                return "Edit request submitted successfully.";
+            default:
+                return "Unknown action.";
+        }
+    }, [savedSessions, archivedSessions, handleLoadSession, handleArchiveSession, handleRequestEdits, finalTranscription, meetingMinutesHtml]);
+
+    // Compute simple context for AI
+    const appContext = JSON.stringify({
+        currentTab: activeTab,
+        hasActiveSession: !!finalTranscription,
+        historyCount: savedSessions.length,
+        archiveCount: archivedSessions.length,
+        currentSessionName: lastMeetingDetails?.topic || "None"
+    });
 
     return (
         <div className="min-h-screen bg-gray-900 text-gray-100 font-sans antialiased selection:bg-cyan-500 selection:text-white pb-12">
@@ -776,6 +785,7 @@ const App: React.FC = () => {
                 </header>
                 
                 <main className="space-y-8" key={refreshKey}>
+                     {/* ... (Existing Tabs and File Upload logic remains same) ... */}
                      <div className="bg-gray-800 rounded-2xl shadow-xl border border-gray-700 overflow-hidden">
                         <div className="flex justify-between items-center px-6 py-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm">
                             <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -904,7 +914,6 @@ const App: React.FC = () => {
                                 Transcription &amp; Tools
                             </h2>
                             
-                            {/* Merger Tool for File Mode */}
                             {activeTab === 'file' && hasProcessedFiles && (
                                 <TranscriptionMerger 
                                     queue={fileQueue}
@@ -912,7 +921,6 @@ const App: React.FC = () => {
                                 />
                             )}
                             
-                            {/* Final Editable Transcription Area */}
                             {finalTranscription && (
                                 <div className="space-y-6 animate-fade-in">
                                     <div>
@@ -1019,8 +1027,8 @@ const App: React.FC = () => {
                             </div>
                         </>
                     )}
-
                 </main>
+                
                  <footer className="text-center mt-12 pb-6 border-t border-gray-800 pt-8">
                     <a href="https://github.com/google/gemini-api" target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-gray-500 hover:text-cyan-400 transition-colors gap-2 text-sm font-medium">
                         <GithubIcon className="w-5 h-5" />
@@ -1028,6 +1036,9 @@ const App: React.FC = () => {
                     </a>
                 </footer>
                 
+                {/* AI Chat Assistant */}
+                <ChatAssistant onExecuteAction={handleAiAction} appContext={appContext} />
+
                 {/* Preview Modal */}
                 {previewSession && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
