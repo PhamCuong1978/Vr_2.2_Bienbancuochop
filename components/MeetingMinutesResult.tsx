@@ -1,11 +1,13 @@
+
 import React from 'react';
 import { DownloadIcon, EyeIcon } from './icons';
 
 interface MeetingMinutesResultProps {
     htmlContent: string;
+    className?: string;
 }
 
-const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent }) => {
+const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent, className }) => {
     
     const getHtmlBlob = () => new Blob([htmlContent], { type: 'text/html' });
 
@@ -28,7 +30,7 @@ const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent
     };
 
     return (
-        <div className="relative bg-gray-700/50 p-4 rounded-lg space-y-4">
+        <div className={`relative bg-gray-700/50 p-4 rounded-lg space-y-4 ${className || ''}`}>
             <div className="absolute top-2 right-2 flex space-x-2 z-10">
                 <button
                     onClick={handlePreview}
@@ -47,7 +49,8 @@ const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent
                     <DownloadIcon className="w-5 h-5" />
                 </button>
             </div>
-            <div className="w-full h-72 sm:h-80 bg-white rounded-md overflow-hidden">
+            {/* Use h-full if className is provided to fill parent, otherwise default to fixed height */}
+            <div className={`w-full bg-white rounded-md overflow-hidden ${className ? 'h-full' : 'h-72 sm:h-80'}`}>
                  <iframe
                     srcDoc={htmlContent}
                     title="Meeting Minutes Preview"

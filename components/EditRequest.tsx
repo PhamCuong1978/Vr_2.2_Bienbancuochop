@@ -49,7 +49,8 @@ const EditRequest: React.FC<EditRequestProps> = ({ onSubmit, disabled }) => {
         const recognition = new SpeechRecognition();
         recognition.continuous = false;
         recognition.interimResults = false;
-        recognition.lang = 'en-US';
+        // Set language to Vietnamese
+        recognition.lang = 'vi-VN';
 
         recognition.onresult = (event) => {
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
@@ -97,22 +98,22 @@ const EditRequest: React.FC<EditRequestProps> = ({ onSubmit, disabled }) => {
     };
 
     const getButtonText = () => {
-        if (isListening) return 'Listening...';
-        if (disabled) return 'Processing...';
-        return 'Submit Edit Request';
+        if (isListening) return 'Đang nghe...';
+        if (disabled) return 'Đang xử lý...';
+        return 'Gửi yêu cầu chỉnh sửa';
     };
 
     return (
         <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-gray-700/50 rounded-lg">
             <label htmlFor="edit-request" className="block text-sm font-medium text-gray-300">
-                Enter your edit requests here. For example: "Add ABC to the attendee list" or "Clarify decision number 2".
+                Nhập yêu cầu chỉnh sửa của bạn tại đây. Ví dụ: "Thêm Ông A vào danh sách tham dự" hoặc "Sửa lại quyết định số 2 cho rõ hơn". (Nhấn mic để nói tiếng Việt)
             </label>
             <div className="relative">
                 <textarea
                     id="edit-request"
                     value={editText}
                     onChange={(e) => setEditText(e.target.value)}
-                    placeholder={isListening ? 'Listening...' : 'Write your request...'}
+                    placeholder={isListening ? 'Đang nghe...' : 'Viết yêu cầu của bạn...'}
                     disabled={disabled}
                     rows={4}
                     className="w-full bg-gray-600 border border-gray-500 text-white rounded-lg p-2 focus:ring-cyan-500 focus:border-cyan-500 pr-10"
@@ -124,7 +125,7 @@ const EditRequest: React.FC<EditRequestProps> = ({ onSubmit, disabled }) => {
                         onClick={handleMicClick}
                         disabled={disabled}
                         className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="Dictate edit request"
+                        title="Nhập bằng giọng nói (Tiếng Việt)"
                     >
                         <MicrophoneIcon className={`w-5 h-5 ${isListening ? 'text-red-500 animate-pulse' : ''}`} />
                     </button>

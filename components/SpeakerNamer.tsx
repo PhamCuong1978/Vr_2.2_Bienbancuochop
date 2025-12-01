@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { UsersIcon } from './icons';
 
@@ -15,7 +16,6 @@ const SpeakerNamer: React.FC<SpeakerNamerProps> = ({ transcription, onUpdateTran
         const matches = transcription.match(speakerRegex);
         if (!matches) return [];
         // Get unique speakers and sort them numerically
-        // Fix: Explicitly type 'a' and 'b' as strings to resolve TypeScript error on '.match'.
         return [...new Set(matches)].sort((a: string, b: string) => {
             const numA = parseInt(a.match(/\d+/)?.[0] || '0');
             const numB = parseInt(b.match(/\d+/)?.[0] || '0');
@@ -43,7 +43,6 @@ const SpeakerNamer: React.FC<SpeakerNamerProps> = ({ transcription, onUpdateTran
     const handleApplyNames = () => {
         let updatedTranscription = transcription;
         for (const [speakerLabel, newName] of Object.entries(speakerMap)) {
-            // Fix: Add a type guard to ensure newName is a string before calling trim().
             if (typeof newName === 'string' && newName.trim()) {
                 // Escape special characters in the label for use in the regex
                 const escapedLabel = speakerLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -60,39 +59,32 @@ const SpeakerNamer: React.FC<SpeakerNamerProps> = ({ transcription, onUpdateTran
     }
 
     return (
-        <div className="space-y-4 p-4 bg-gray-700/50 rounded-lg">
-            <h3 className="text-md font-semibold text-gray-300 flex items-center gap-x-2">
-                <UsersIcon className="w-5 h-5 text-yellow-400" />
-                Name Detected Speakers
-            </h3>
-            <div className="space-y-3">
+        <div className="space-y-4 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {detectedSpeakers.map(speakerLabel => (
-                    <div key={speakerLabel} className="grid grid-cols-3 items-center gap-3">
-                        <label htmlFor={`speaker-${speakerLabel}`} className="text-sm font-medium text-gray-300 text-right">
+                    <div key={speakerLabel} className="bg-gray-800/50 p-3 rounded-lg border border-gray-700 flex flex-col sm:flex-row sm:items-center gap-2">
+                        <label htmlFor={`speaker-${speakerLabel}`} className="text-xs font-bold text-gray-400 uppercase sm:w-1/3 truncate">
                             {speakerLabel.replace(':', '')}
                         </label>
-                        <div className="col-span-2">
-                            <input
-                                id={`speaker-${speakerLabel}`}
-                                type="text"
-                                value={speakerMap[speakerLabel] || ''}
-                                onChange={e => handleNameChange(speakerLabel, e.target.value)}
-                                placeholder="Enter name..."
-                                disabled={disabled}
-                                className="w-full bg-gray-600 border border-gray-500 text-white rounded-lg p-2 text-sm focus:ring-cyan-500 focus:border-cyan-500"
-                            />
-                        </div>
+                        <input
+                            id={`speaker-${speakerLabel}`}
+                            type="text"
+                            value={speakerMap[speakerLabel] || ''}
+                            onChange={e => handleNameChange(speakerLabel, e.target.value)}
+                            placeholder="Enter Name..."
+                            disabled={disabled}
+                            className="flex-grow bg-gray-900 border border-gray-600 text-white rounded-md p-2 text-sm focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 outline-none"
+                        />
                     </div>
                 ))}
             </div>
-            <div className="text-center pt-2">
+            <div className="flex justify-end pt-2">
                 <button
                     onClick={handleApplyNames}
-                    // Fix: Explicitly type 'name' as a string to resolve TypeScript error on '.trim'.
                     disabled={disabled || Object.values(speakerMap).every((name: string) => !name.trim())}
-                    className="w-full sm:w-auto px-6 py-2 bg-yellow-600 text-white font-bold rounded-lg shadow-lg hover:bg-yellow-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-all"
+                    className="w-full sm:w-auto px-6 py-2 bg-yellow-600 text-white font-bold rounded-lg shadow-md hover:bg-yellow-700 disabled:bg-gray-700 disabled:cursor-not-allowed transition-colors text-sm"
                 >
-                    Apply Names
+                    Apply Speaker Names
                 </button>
             </div>
         </div>

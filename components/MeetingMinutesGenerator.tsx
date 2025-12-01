@@ -77,7 +77,7 @@ const InputField: React.FC<{
                 type="text"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                placeholder={isListening ? 'Listening...' : placeholder}
+                placeholder={isListening ? 'Đang nghe...' : placeholder}
                 disabled={disabled}
                 className="w-full bg-gray-600 border border-gray-500 text-white rounded-lg p-2 focus:ring-cyan-500 focus:border-cyan-500 pr-10"
                 aria-label={label}
@@ -88,7 +88,7 @@ const InputField: React.FC<{
                     onClick={onMicClick}
                     disabled={disabled}
                     className={`absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors`}
-                    title={`Dictate for ${label}`}
+                    title={`Nhập bằng giọng nói cho ${label}`}
                 >
                     <MicrophoneIcon className={`w-5 h-5 ${isListening ? 'text-red-500 animate-pulse' : ''}`} />
                 </button>
@@ -99,11 +99,12 @@ const InputField: React.FC<{
 
 
 const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSubmit, disabled, initialDetails }) => {
+    // Set default topic to "Biên bản họp"
     const [details, setDetails] = useState<MeetingDetails>({
         timeAndPlace: '',
         attendees: '',
         chair: '',
-        topic: '',
+        topic: 'Biên bản họp',
     });
 
     const [listeningField, setListeningField] = useState<keyof MeetingDetails | null>(null);
@@ -130,7 +131,8 @@ const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSub
         const recognition = new SpeechRecognition();
         recognition.continuous = false;
         recognition.interimResults = false;
-        recognition.lang = 'en-US'; // Set language to English
+        // Set language to Vietnamese
+        recognition.lang = 'vi-VN'; 
 
         recognition.onresult = (event) => {
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
@@ -138,6 +140,11 @@ const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSub
             if (fieldToUpdate) {
                 setDetails(prevDetails => {
                     const existingText = prevDetails[fieldToUpdate];
+                    // If default value "Biên bản họp" hasn't been touched and we dictate to topic, replace it instead of append
+                    if (fieldToUpdate === 'topic' && existingText === 'Biên bản họp') {
+                         return { ...prevDetails, topic: transcript };
+                    }
+                    
                     return {
                         ...prevDetails,
                         [fieldToUpdate]: (existingText ? existingText + ' ' : '') + transcript,
@@ -225,12 +232,12 @@ const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSub
 
     return (
         <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-gray-700/50 rounded-lg">
-            <p className="text-sm text-gray-400">Provide optional details to include in the minutes. The AI will attempt to fill in any missing information from the transcript. Click the microphone to dictate.</p>
+            <p className="text-sm text-gray-400">Điền thông tin chi tiết (tùy chọn). AI sẽ tự động điền các thông tin còn thiếu từ bản ghi âm. Nhấn vào biểu tượng micro để nhập bằng giọng nói (Tiếng Việt).</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {renderInputField('timeAndPlace', 'Time & Place', "e.g., 2 PM, Oct 26, 2023, Room 4")}
-                {renderInputField('attendees', 'Attendees', "e.g., John D, Jane S, Marketing Team")}
-                {renderInputField('chair', 'Chairperson', "e.g., John Doe")}
-                {renderInputField('topic', 'Topic / Purpose', "e.g., Q4 Marketing Strategy")}
+                {renderInputField('timeAndPlace', 'Thời gian & Địa điểm', "VD: 14h, 26/10/2023, Phòng họp 4")}
+                {renderInputField('attendees', 'Thành phần tham dự', "VD: Nguyễn Văn A, Trần Thị B, Team Marketing")}
+                {renderInputField('chair', 'Chủ trì', "VD: Nguyễn Văn A")}
+                {renderInputField('topic', 'Chủ đề / Mục đích cuộc họp', "VD: Chiến lược Marketing Q4")}
             </div>
             <div className="text-center pt-2">
                 <button
@@ -238,7 +245,7 @@ const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSub
                     disabled={disabled || listeningField !== null}
                     className="w-full sm:w-auto px-6 py-2 bg-purple-600 text-white font-bold rounded-lg shadow-lg hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 disabled:scale-100"
                 >
-                    {disabled ? 'Generating...' : '📝 Generate Meeting Minutes'}
+                    {disabled ? 'Đang tạo biên bản...' : '📝 Tạo Biên Bản Cuộc Họp'}
                 </button>
             </div>
         </form>

@@ -119,18 +119,22 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
     const isBusy = disabled || isRecording;
 
     return (
-        <div>
+        <div className="space-y-4">
             <label 
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
-                className={`flex flex-col items-center justify-center w-full h-32 px-4 transition bg-gray-700 border-2 border-gray-600 border-dashed rounded-md appearance-none ${isBusy ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-cyan-400'}`}
+                className={`group flex flex-col items-center justify-center w-full h-32 sm:h-40 px-4 transition-all duration-300 bg-gray-900/50 border-2 border-dashed rounded-xl appearance-none ${isBusy ? 'cursor-not-allowed opacity-50 border-gray-700' : 'cursor-pointer border-gray-600 hover:border-cyan-400 hover:bg-gray-900/80'}`}
             >
-                <span className="flex items-center space-x-2">
-                    <UploadIcon className="w-6 h-6 text-gray-400" />
-                    <span className="font-medium text-gray-300">
-                        Drop files (auto-splits {'>'}100MB), or <span className="text-cyan-400 underline">browse</span>
+                <div className="flex flex-col items-center space-y-2 text-center">
+                    <div className={`p-3 rounded-full bg-gray-800 group-hover:bg-cyan-900/30 transition-colors ${isBusy ? '' : 'text-cyan-400'}`}>
+                        <UploadIcon className="w-8 h-8" />
+                    </div>
+                    <span className="font-medium text-gray-300 group-hover:text-white transition-colors">
+                        <span className="hidden sm:inline">Drag & drop files or </span>
+                        <span className="text-cyan-400 underline">Browse</span>
                     </span>
-                </span>
+                    <span className="text-xs text-gray-500">Supports MP3, WAV, M4A, TXT, HTML (Auto-splits large files)</span>
+                </div>
                 <input
                     ref={fileInputRef}
                     type="file"
@@ -138,15 +142,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
                     className="hidden"
                     multiple
                     onChange={handleFileChange}
-                    accept="audio/*,text/plain,.txt,.md"
+                    accept="audio/*,text/plain,.txt,.md,.html,.htm"
                     disabled={isBusy}
                 />
             </label>
             
-            <div className="flex items-center my-4">
-                <div className="flex-grow border-t border-gray-600"></div>
-                <span className="flex-shrink mx-4 text-gray-400 text-sm font-semibold">OR</span>
-                <div className="flex-grow border-t border-gray-600"></div>
+            <div className="flex items-center gap-4">
+                <div className="h-px bg-gray-700 flex-1"></div>
+                <span className="text-gray-500 text-xs font-bold uppercase">OR</span>
+                <div className="h-px bg-gray-700 flex-1"></div>
             </div>
 
             <div className="text-center">
@@ -155,7 +159,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
                         type="button"
                         onClick={handleStopRecording}
                         disabled={disabled}
-                        className="w-full sm:w-auto flex items-center justify-center gap-x-3 px-6 py-2 bg-red-600 text-white font-bold rounded-lg shadow-lg hover:bg-red-700 disabled:bg-gray-600 transition-all duration-300"
+                        className="w-full flex items-center justify-center gap-x-2 px-6 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700 disabled:bg-gray-600 transition-all duration-300 animate-pulse"
                     >
                         <StopIcon className="w-5 h-5" />
                         <span>Stop Recording ({formatDuration(recordingTime)})</span>
@@ -165,10 +169,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
                         type="button"
                         onClick={handleStartRecording}
                         disabled={disabled}
-                        className="w-full sm:w-auto flex items-center justify-center gap-x-3 px-6 py-2 bg-gray-600 text-white font-bold rounded-lg shadow-lg hover:bg-gray-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-all duration-300"
+                        className="w-full flex items-center justify-center gap-x-2 px-6 py-3 bg-gray-700 text-gray-200 font-bold rounded-xl shadow hover:bg-gray-600 hover:text-white disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed transition-all duration-300"
                     >
                          <MicrophoneIcon className="w-5 h-5" />
-                        <span>Record with Microphone</span>
+                        <span>Record Microphone</span>
                     </button>
                 )}
             </div>

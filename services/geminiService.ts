@@ -190,12 +190,13 @@ export const generateMeetingMinutes = async (
     const promptTemplate = `Bạn là thư ký cấp cao của hội đồng quản trị với khả năng tổng hợp và phân tích thông tin xuất sắc.
 Nhiệm vụ: Lập BIÊN BẢN CUỘC HỌP từ nội dung ghi âm.
 
-YÊU CẦU NGÔN NGỮ: 100% TIẾNG VIỆT NAM (Văn phong hành chính, trang trọng, rõ ràng).
+YÊU CẦU NGÔN NGỮ: 100% TIẾNG VIỆT NAM (Văn phong hành chính, trang trọng, lịch sự).
 
 CẤU TRÚC BIÊN BẢN VÀ HƯỚNG DẪN CHI TIẾT:
 
 A. THÔNG TIN CHUNG
-(Điền đầy đủ: Thời gian, Địa điểm, Thành phần tham dự, Chủ trì, Thư ký, Mục đích).
+- Thời gian, Địa điểm, Thành phần tham dự, Chủ trì: Lấy từ dữ liệu cung cấp.
+- **Thư ký:** Ghi là "AI của anh Cường".
 
 B. NỘI DUNG CHI TIẾT & THẢO LUẬN (PHẦN CỐT LÕI - YÊU CẦU ĐỘ CHI TIẾT CỰC ĐẠI)
 Đây là linh hồn của biên bản. Không được viết tóm tắt hời hợt. Hãy thuật lại diễn biến cuộc họp thật chi tiết, cụ thể như sau:
@@ -225,8 +226,18 @@ E. KÝ DUYỆT
 (Khu vực ký của Thư ký và Chủ tọa).
 
 Đầu ra yêu cầu:
--   Mã HTML hoàn chỉnh (bắt đầu bằng <!DOCTYPE html>).
--   Sử dụng CSS inline để trình bày đẹp (bảng có đường viền, tiêu đề đậm, giãn dòng hợp lý).
+-   **TUYỆT ĐỐI KHÔNG được có lời dẫn, lời chào, hay bất kỳ văn bản nào bên ngoài mã HTML.**
+-   Mã HTML hoàn chỉnh (bắt đầu ngay lập tức bằng <!DOCTYPE html>).
+-   **CSS Inline BẮT BUỘC cho giao diện đẹp, trang trọng:**
+    -   **Body:** Font-family 'Times New Roman', serif; line-height: 1.6; color: #222; max-width: 900px; margin: 0 auto; padding: 40px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    -   **Tiêu đề chính (H1):** LUÔN LÀ "BIÊN BẢN CUỘC HỌP". CSS: Text-align: center; color: #2c3e50; text-transform: uppercase; margin-bottom: 5px; font-size: 24pt;
+    -   **Dòng trích yếu (Subtitle/Vv):** Ngay dưới H1, thêm một thẻ <p> căn giữa (text-align: center), in nghiêng (font-style: italic), font-size: 14pt; margin-bottom: 40px; Nội dung là: "(V/v: [Chủ đề cuộc họp])".
+    -   **Các tiêu đề mục lớn (H2 - Mục A, B, C...):** **COLOR: #4472C4 (Xanh coban nhạt);** border-bottom: 2px solid #4472C4; padding-bottom: 10px; margin-top: 40px; text-transform: uppercase; font-size: 16pt; letter-spacing: 0.5px;
+    -   **Tiêu đề con (H3):** Color: #333; font-weight: bold; margin-top: 25px; font-size: 14pt;
+    -   **Bảng (Table):** Width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12pt;
+    -   **Th (Table Header):** Background-color: #f0f4f8; border: 1px solid #a0aec0; padding: 12px; text-align: left; font-weight: bold; color: #2d3748;
+    -   **Td (Table Data):** Border: 1px solid #cbd5e0; padding: 12px; vertical-align: top;
+    -   **Strong/Bold:** Color: #2d3748;
 -   Nội dung phần B phải chiếm tỷ trọng lớn nhất và thể hiện được sự sâu sắc của cuộc họp.`;
     
     const fullPrompt = `${promptTemplate}
@@ -240,9 +251,9 @@ Thông tin bổ sung (Metadata):
 - Thời gian & địa điểm: ${details.timeAndPlace || '(không có)'}
 - Thành phần tham dự: ${details.attendees || '(không có)'}
 - Chủ trì: ${details.chair || '(không có)'}
-- Chủ đề: ${details.topic || '(không có)'}
+- Chủ đề cho dòng V/v: ${details.topic}
 
-Hãy bắt đầu tạo file HTML ngay bây giờ.`;
+BẮT ĐẦU NGAY VỚI "<!DOCTYPE html>". KHÔNG TRẢ LỜI LẠI TÔI.`;
 
 
     try {
@@ -285,8 +296,10 @@ export const regenerateMeetingMinutes = async (
 Nhiệm vụ: Chỉnh sửa biên bản cuộc họp dựa trên yêu cầu của người dùng.
 
 NGUYÊN TẮC CỐT LÕI:
-1.  **Giữ vững độ chi tiết:** Không được cắt bớt nội dung phần B (Thảo luận) thành tóm tắt ngắn gọn. Phải giữ nguyên sự phân tích sâu sắc của phiên bản trước, chỉ sửa những chỗ được yêu cầu.
+1.  **Giữ vững độ chi tiết:** Không được cắt bớt nội dung phần B (Thảo luận).
 2.  **Ngôn ngữ:** 100% Tiếng Việt.
+3.  **Style:** H1 là "BIÊN BẢN CUỘC HỌP", dưới H1 có dòng V/v in nghiêng. Mục Thư ký là "AI của anh Cường".
+4.  **KHÔNG LỜI DẪN:** Chỉ trả về code HTML. Bắt đầu ngay bằng DOCTYPE.
 
 Thông tin đầu vào:
 1.  Transcription gốc (để tham chiếu).
@@ -302,7 +315,7 @@ Hãy trả về mã HTML hoàn chỉnh đã chỉnh sửa.`;
 ${transcription}
 ---
 **2. Thông tin:**
-- Chủ đề: ${details.topic || '(không có)'}
+- Chủ đề: ${details.topic || 'BIÊN BẢN HỌP'}
 ---
 **3. HTML hiện tại:**
 \`\`\`html
@@ -313,7 +326,7 @@ ${previousHtml}
 ${editRequest}
 ---
 
-Bắt đầu tạo lại HTML:`;
+BẮT ĐẦU NGAY VỚI "<!DOCTYPE html>".`;
 
     try {
         const response = await ai.models.generateContent({
