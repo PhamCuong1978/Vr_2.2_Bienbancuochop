@@ -770,6 +770,9 @@ const App: React.FC = () => {
                     <p className="text-gray-400 mt-2 text-sm sm:text-base max-w-2xl mx-auto">
                         Transcribe audio, analyze conversations, and generate professional minutes with AI.
                     </p>
+                    <p className="text-cyan-500 font-medium mt-3 text-sm tracking-wide">
+                        Đây là sản phẩm của Mr Cường
+                    </p>
                 </header>
                 
                 <main className="space-y-8" key={refreshKey}>
