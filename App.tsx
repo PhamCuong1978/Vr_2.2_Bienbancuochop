@@ -31,9 +31,6 @@ const extractTopicFromHtml = (htmlContent: string): string | null => {
         while ((node = walker.nextNode())) {
             const nodeText = node.textContent || '';
             if (nodeText.includes('Chủ đề / Mục đích cuộc họp') || nodeText.includes('V/v:')) {
-                // Found the label. The actual topic is likely in the text immediately following the colon,
-                // or in the next sibling element of its parent.
-                
                 // Regex for "Chủ đề / Mục đích cuộc họp: [Content]" OR "(V/v: [Content])"
                 const match = nodeText.match(/(?:Chủ đề \/ Mục đích cuộc họp:|V\/v:)\s*(.+?)(\)|$)/);
 
@@ -60,6 +57,20 @@ const extractTopicFromHtml = (htmlContent: string): string | null => {
     return null;
 };
 
+// Helper to extract end time from the closing sentence
+const extractEndTime = (html: string): string => {
+    try {
+         const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const text = tempDiv.innerText || tempDiv.textContent || '';
+        // Match: "Cuộc họp kết thúc vào lúc [time] cùng ngày"
+        const match = text.match(/Cuộc họp kết thúc vào lúc\s*(.*?)(?=\s*(cùng ngày|\.|$))/i);
+        return match ? match[1].trim() : '';
+    } catch(e) {
+        return '';
+    }
+};
+
 // Helper to parse Meeting Details from HTML for import
 const parseMeetingDetailsFromHtml = (html: string): MeetingDetails => {
     const tempDiv = document.createElement('div');
@@ -68,8 +79,6 @@ const parseMeetingDetailsFromHtml = (html: string): MeetingDetails => {
     
     // Helper to find text after a keyword line
     const extract = (keywords: string[]) => {
-        // Create regex to find line starting with keyword
-        // e.g., "Thời gian: 14h..." or "Thời gian & địa điểm: ..."
         for (const kw of keywords) {
             const regex = new RegExp(`${kw}.*?[:\\.]\\s*(.*?)(?=(?:\\n|$))`, 'i');
             const match = text.match(regex);
@@ -80,6 +89,7 @@ const parseMeetingDetailsFromHtml = (html: string): MeetingDetails => {
 
     return {
         timeAndPlace: extract(['Thời gian', 'Địa điểm', 'Thời gian & địa điểm']),
+        endTime: extractEndTime(html),
         attendees: extract(['Thành phần', 'Thành phần tham dự']),
         chair: extract(['Chủ trì', 'Chủ tọa']),
         topic: extractTopicFromHtml(html) || 'Biên bản được nhập',
@@ -98,28 +108,14 @@ export interface SavedSession {
 
 const HISTORY_KEY = 'gemini_meeting_minutes_history';
 const ARCHIVE_KEY = 'gemini_meeting_minutes_archive';
-
-// Reduced chunk size to 6MB to prevent "Array buffer allocation failed" and ensure processed WAVs fits in API limit.
-// 6MB MP3 ~ 11MB WAV (16kHz mono) ~ 15MB Base64. Safe for Gemini API (20MB limit).
 const CHUNK_SIZE = 6 * 1024 * 1024; 
 
 const App: React.FC = () => {
-    // Key used to force full component remount on refresh
     const [refreshKey, setRefreshKey] = useState(0);
-
     const [activeTab, setActiveTab] = useState<'file' | 'live' | 'history' | 'cloud'>('file');
-    
-    // Replaced simple file list with a Queue System
     const [fileQueue, setFileQueue] = useState<QueueItem[]>([]);
-    
     const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-pro');
-    
-    // The master transcription state. 
-    // In 'file' mode: set by the Merge action.
-    // In 'live' mode: set by the live session completion.
-    // In 'history' mode: set by loading a session.
     const [finalTranscription, setFinalTranscription] = useState<string>('');
-    
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [progress, setProgress] = useState<number>(0);
     const [statusMessage, setStatusMessage] = useState<string>('');
@@ -130,20 +126,17 @@ const App: React.FC = () => {
         noiseReduction: true,
         normalizeVolume: true,
         removeSilence: true,
-        identifySpeakers: true, // Default to true as requested
+        identifySpeakers: true,
+        speakerCount: undefined,
     });
 
     const [meetingMinutesHtml, setMeetingMinutesHtml] = useState<string>('');
     const [isGeneratingMinutes, setIsGeneratingMinutes] = useState<boolean>(false);
     const [minutesError, setMinutesError] = useState<string | null>(null);
     const [lastMeetingDetails, setLastMeetingDetails] = useState<MeetingDetails | null>(null);
-    const [minutesGenerationProgress, setMinutesGenerationProgress] = useState(0);
-    const [minutesGenerationStatus, setMinutesGenerationStatus] = useState('');
-
+    
     const [isEditingMinutes, setIsEditingMinutes] = useState<boolean>(false);
     const [editError, setEditError] = useState<string | null>(null);
-    const [editProgress, setEditProgress] = useState<number>(0);
-    const [editStatusMessage, setEditStatusMessage] = useState<string>('');
 
     const [isDiarizing, setIsDiarizing] = useState<boolean>(false);
     const [diarizationError, setDiarizationError] = useState<string | null>(null);
@@ -156,7 +149,6 @@ const App: React.FC = () => {
     const cancelRequestRef = useRef<boolean>(false);
 
 
-    // Load history from localStorage on initial render
     useEffect(() => {
         try {
             const savedHistory = localStorage.getItem(HISTORY_KEY);
@@ -172,7 +164,6 @@ const App: React.FC = () => {
         }
     }, []);
 
-    // Save history to localStorage whenever it changes
     useEffect(() => {
         try {
             localStorage.setItem(HISTORY_KEY, JSON.stringify(savedSessions));
@@ -181,7 +172,6 @@ const App: React.FC = () => {
         }
     }, [savedSessions]);
     
-    // Save archive to localStorage
     useEffect(() => {
         try {
             localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archivedSessions));
@@ -202,16 +192,14 @@ const App: React.FC = () => {
         setIsDiarizing(false);
     }
 
-    // --- File Handling & Splitting Logic ---
     const handleFileSelect = (files: File[]) => {
         resetState();
-        setFinalTranscription(''); // Reset final text when new files are added
+        setFinalTranscription('');
         
         const newQueueItems: QueueItem[] = [];
 
         files.forEach(file => {
             if (file.size > CHUNK_SIZE && file.type.startsWith('audio/')) {
-                // Split Logic
                 let offset = 0;
                 let part = 1;
                 const totalParts = Math.ceil(file.size / CHUNK_SIZE);
@@ -228,14 +216,13 @@ const App: React.FC = () => {
                         totalParts: totalParts,
                         status: 'idle',
                         transcription: null,
-                        isSelected: true, // Auto-select by default
+                        isSelected: true,
                     });
                     
                     offset += CHUNK_SIZE;
                     part++;
                 }
             } else {
-                // Normal file
                 newQueueItems.push({
                     id: Math.random().toString(36).substr(2, 9),
                     file: file,
@@ -265,7 +252,7 @@ const App: React.FC = () => {
     const handleLiveTranscriptionComplete = (text: string) => {
         resetState();
         setFinalTranscription(text);
-        setFileQueue([]); // Clear queue if switching to live results
+        setFileQueue([]);
     };
 
     const handleCancel = () => {
@@ -274,7 +261,6 @@ const App: React.FC = () => {
             setIsLoading(false);
             setProgress(0);
             setStatusMessage('Processing cancelled by user.');
-            // Reset processing status in queue
             setFileQueue(prev => prev.map(item => 
                 item.status === 'processing' ? { ...item, status: 'idle' } : item
             ));
@@ -294,15 +280,14 @@ const App: React.FC = () => {
     };
 
     const handleLoadSession = useCallback((sessionId: string) => {
-        // Try finding in both local and archive
         const sessionToLoad = savedSessions.find(s => s.id === sessionId) || archivedSessions.find(s => s.id === sessionId);
         if (sessionToLoad) {
             resetState();
             setFinalTranscription(sessionToLoad.transcription);
             setMeetingMinutesHtml(sessionToLoad.meetingMinutesHtml);
             setLastMeetingDetails(sessionToLoad.meetingDetails);
-            setFileQueue([]); // Clear file queue
-            setActiveTab('file'); // Switch back to the main view
+            setFileQueue([]);
+            setActiveTab('file');
             return true;
         }
         return false;
@@ -362,7 +347,7 @@ const App: React.FC = () => {
                 const extractedTopic = details.topic || file.name.replace('.html', '').replace('.htm', '');
 
                 const newSession: SavedSession = {
-                    id: Date.now().toString() + Math.random().toString(36).substr(2, 5), // Unique ID
+                    id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
                     createdAt: new Date().toISOString(),
                     name: `${extractedTopic} (Đã nhập)`,
                     transcription: "Phiên này được nhập từ file HTML. Dữ liệu lời thoại gốc không khả dụng để chỉnh sửa AI.",
@@ -408,7 +393,6 @@ const App: React.FC = () => {
                     const isHtml = item.file.type === 'text/html' || item.file.name.toLowerCase().endsWith('.html') || item.file.name.toLowerCase().endsWith('.htm');
 
                     if (isHtml) {
-                        setStatusMessage(`Extracting text from HTML: ${item.file.name}...`);
                         const htmlContent = await item.file.text();
                         const tempDiv = document.createElement('div');
                         tempDiv.innerHTML = htmlContent;
@@ -418,25 +402,23 @@ const App: React.FC = () => {
                         resultText = await item.file.text();
                     } else if (item.file.type.startsWith('audio/')) {
                         let fileToProcess = item.file;
-                        const { identifySpeakers, ...audioOptions } = processingOptions;
+                        const { identifySpeakers, speakerCount, ...audioOptions } = processingOptions;
                         const isAnyAudioOptionEnabled = Object.values(audioOptions).some(option => option === true);
 
                         if (isAnyAudioOptionEnabled) {
                             try {
-                                setStatusMessage(`Pre-processing audio for ${item.file.name}...`);
                                 fileToProcess = await processAudio(item.file, processingOptions);
                             } catch (conversionError: any) {
-                                console.warn(`Audio processing failed for ${item.file.name}, proceeding with original file. Error:`, conversionError);
+                                console.warn(`Audio processing failed for ${item.file.name}, proceeding with original file.`);
                             }
                         }
 
                         if (cancelRequestRef.current) break;
                         
                         if (fileToProcess.size > 15 * 1024 * 1024) {
-                             throw new Error("File chunk is too large for the API after processing. Please try smaller files or disable audio pre-processing.");
+                             throw new Error("File chunk is too large for the API after processing. Please try smaller files.");
                         }
 
-                        setStatusMessage(`Sending ${item.file.name} to Gemini...`);
                         await new Promise(res => setTimeout(res, 100));
                         resultText = await transcribeAudio(fileToProcess, selectedModel, processingOptions);
                     } else {
@@ -452,8 +434,6 @@ const App: React.FC = () => {
                 } catch (itemError: any) {
                     console.error(`Error processing item ${item.id}:`, itemError);
                     let errMsg = itemError.message || "An unknown error occurred.";
-                    if (errMsg === "[object Object]") errMsg = "API Error (Unknown Format)";
-
                     setFileQueue(prev => prev.map(q => 
                         q.id === item.id ? { ...q, status: 'error', errorMsg: errMsg } : q
                     ));
@@ -465,8 +445,7 @@ const App: React.FC = () => {
 
         } catch (err) {
             if (cancelRequestRef.current) return;
-            const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
-            setError(errorMessage);
+            setError(err instanceof Error ? err.message : "An unknown error occurred.");
         } finally {
             setIsLoading(false);
         }
@@ -484,7 +463,6 @@ const App: React.FC = () => {
         setFinalTranscription(newText);
     };
 
-
     const handleIdentifySpeakers = useCallback(async () => {
         if (!finalTranscription) {
             setDiarizationError("A transcription must exist before identifying speakers.");
@@ -501,572 +479,328 @@ const App: React.FC = () => {
                 clearInterval(intervalId);
                 return;
             }
-            setDiarizationProgress(prev => Math.min(prev + Math.floor(Math.random() * 5) + 2, 95));
-        }, 500);
+            setDiarizationProgress(prev => (prev >= 90 ? prev : prev + 5));
+        }, 1000);
 
         try {
-            const result = await identifySpeakers(finalTranscription, selectedModel);
-            if (cancelRequestRef.current) return;
-            setFinalTranscription(result); 
-        } catch (err) {
-            if (cancelRequestRef.current) return;
-            const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
-            setDiarizationError(errorMessage);
-        } finally {
+            const diarizedText = await identifySpeakers(finalTranscription, selectedModel, processingOptions.speakerCount);
             clearInterval(intervalId);
-            setIsDiarizing(false);
             setDiarizationProgress(100);
-        }
-
-    }, [finalTranscription, selectedModel]);
-
-
-    const handleGenerateMinutes = useCallback(async (details: MeetingDetails) => {
-        if (!finalTranscription) {
-            setMinutesError("A transcription must exist before generating minutes.");
-            return;
-        }
-
-        setIsGeneratingMinutes(true);
-        cancelRequestRef.current = false;
-        setMeetingMinutesHtml('');
-        setMinutesError(null);
-        setEditError(null);
-        setLastMeetingDetails(details);
-
-        setMinutesGenerationProgress(0);
-        setMinutesGenerationStatus('Initializing...');
-        const intervalId = window.setInterval(() => {
-            if (cancelRequestRef.current) {
-                clearInterval(intervalId);
-                return;
-            }
-            setMinutesGenerationProgress(prev => {
-                const next = prev + Math.floor(Math.random() * 5) + 2;
-                if (next >= 95) {
-                    clearInterval(intervalId);
-                    return 95;
-                }
-                if (next < 20) setMinutesGenerationStatus('Sending transcription...');
-                else if (next < 70) setMinutesGenerationStatus('Analyzing content...');
-                else setMinutesGenerationStatus('Structuring the minutes...');
-                return next;
-            });
-        }, 600);
-
-
-        try {
-            const resultHtml = await generateMeetingMinutes(finalTranscription, details, selectedModel);
-            clearInterval(intervalId);
-            if (cancelRequestRef.current) return;
-
-            setMinutesGenerationProgress(100);
-            setMinutesGenerationStatus('✅ Minutes generated!');
-            await new Promise(res => setTimeout(res, 800));
-
-            setMeetingMinutesHtml(resultHtml);
-
-            // Save new session to history
-            const extractedTopic = extractTopicFromHtml(resultHtml);
-            const sessionTopic = extractedTopic || details.topic || 'Biên bản không có tiêu đề';
-            
-            const newSession: SavedSession = {
-                id: Date.now().toString(),
-                createdAt: new Date().toISOString(),
-                name: `${new Date().toLocaleDateString()} - ${sessionTopic}`,
-                transcription: finalTranscription,
-                meetingMinutesHtml: resultHtml,
-                meetingDetails: details,
-            };
-            setSavedSessions(prev => [newSession, ...prev]);
-
-        } catch (err) {
-            clearInterval(intervalId);
-            if (cancelRequestRef.current) return;
-            const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
-            setMinutesError(errorMessage);
+            setFinalTranscription(diarizedText);
+        } catch (err: any) {
+             clearInterval(intervalId);
+             setDiarizationError(err.message || "Failed to identify speakers.");
         } finally {
-            clearInterval(intervalId);
+            setIsDiarizing(false);
+        }
+    }, [finalTranscription, selectedModel, processingOptions.speakerCount]);
+
+    const handleGenerateMinutes = async (details: MeetingDetails) => {
+        setIsGeneratingMinutes(true);
+        setMinutesError(null);
+        setLastMeetingDetails(details);
+        try {
+             const html = await generateMeetingMinutes(finalTranscription, details, selectedModel);
+             setMeetingMinutesHtml(html);
+        } catch (e: any) {
+            setMinutesError(e.message);
+        } finally {
             setIsGeneratingMinutes(false);
         }
-    }, [finalTranscription, selectedModel]);
-
-    const handleRequestEdits = useCallback(async (editText: string) => {
-        if (!finalTranscription || !meetingMinutesHtml || !lastMeetingDetails) {
-            setEditError("Cannot request edits without an existing transcription, generated minutes, and meeting details.");
-            return;
-        }
-        // Force scroll to edit area
-        const el = document.getElementById('transcription-result-area');
-        if (el) el.scrollIntoView({ behavior: 'smooth' });
-
-        setIsEditingMinutes(true);
-        cancelRequestRef.current = false;
-        setEditError(null);
-        setEditProgress(0);
-        setEditStatusMessage('AI Agent is applying your edits...');
-
-        const intervalId = window.setInterval(() => {
-            if (cancelRequestRef.current) {
-                clearInterval(intervalId);
-                return;
-            }
-            setEditProgress(prev => {
-                const next = prev + Math.floor(Math.random() * 6) + 3;
-                if (next >= 95) {
-                    clearInterval(intervalId);
-                    return 95;
-                }
-                if (next < 30) setEditStatusMessage('Processing request...');
-                else if (next < 80) setEditStatusMessage('Rewriting document...');
-                else setEditStatusMessage('Finalizing...');
-                return next;
-            });
-        }, 500);
-
-        try {
-            const resultHtml = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, editText, selectedModel);
-            clearInterval(intervalId);
-            if (cancelRequestRef.current) return;
-
-            setEditProgress(100);
-            setEditStatusMessage('✅ Edits applied!');
-            await new Promise(res => setTimeout(res, 800));
-
-            setMeetingMinutesHtml(resultHtml);
-
-            const extractedTopic = extractTopicFromHtml(resultHtml);
-            const sessionTopic = extractedTopic || lastMeetingDetails.topic || 'Biên bản không có tiêu đề';
-            
-            const newSession: SavedSession = {
-                id: Date.now().toString(),
-                createdAt: new Date().toISOString(),
-                name: `${new Date().toLocaleDateString()} - ${sessionTopic} (Đã chỉnh sửa)`,
-                transcription: finalTranscription,
-                meetingMinutesHtml: resultHtml,
-                meetingDetails: lastMeetingDetails,
-            };
-            setSavedSessions(prev => [newSession, ...prev]);
-
-        } catch (err) {
-            clearInterval(intervalId);
-            if (cancelRequestRef.current) return;
-            const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
-            setEditError(errorMessage);
-        } finally {
-            clearInterval(intervalId);
-            setIsEditingMinutes(false);
-        }
-    }, [finalTranscription, meetingMinutesHtml, selectedModel, lastMeetingDetails]);
-
-
-    const isBusy = isLoading || isGeneratingMinutes || isEditingMinutes || isDiarizing;
-    const selectedCount = fileQueue.filter(i => i.isSelected && i.status !== 'completed').length;
-    // Check if we have processed files ready for merging
-    const hasProcessedFiles = fileQueue.some(i => i.status === 'completed' && i.transcription);
-
-    const handleRefreshApp = () => {
-        const hasData = fileQueue.length > 0 || finalTranscription || meetingMinutesHtml;
-        if (hasData) {
-             if (!window.confirm("Bạn có chắc chắn muốn làm mới ứng dụng? Mọi dữ liệu chưa lưu sẽ bị mất.")) {
-                return;
-            }
-        }
-        
-        // Cancel any running processes
-        if (isBusy) {
-            cancelRequestRef.current = true;
-        }
-
-        setFileQueue([]);
-        setFinalTranscription('');
-        setMeetingMinutesHtml('');
-        setLastMeetingDetails(null);
-        setError(null);
-        setProgress(0);
-        setStatusMessage('');
-        setIsLoading(false);
-        setIsGeneratingMinutes(false);
-        setMinutesError(null);
-        setMinutesGenerationProgress(0);
-        setMinutesGenerationStatus('');
-        setIsEditingMinutes(false);
-        setEditError(null);
-        setEditProgress(0);
-        setEditStatusMessage('');
-        setIsDiarizing(false);
-        setDiarizationError(null);
-        setDiarizationProgress(0);
-        setActiveTab('file');
-
-         setProcessingOptions({
-            convertToMono16kHz: true,
-            noiseReduction: true,
-            normalizeVolume: true,
-            removeSilence: true,
-            identifySpeakers: true,
-        });
-        setSelectedModel('gemini-2.5-pro');
-        setRefreshKey(prev => prev + 1);
-        setTimeout(() => {
-            cancelRequestRef.current = false;
-        }, 100);
     };
 
-    const TabButton: React.FC<{ tabName: 'file' | 'live' | 'history' | 'cloud'; children: React.ReactNode }> = ({ tabName, children }) => (
-        <button
-            onClick={() => setActiveTab(tabName)}
-            disabled={isBusy}
-            className={`flex-1 sm:flex-none px-4 py-3 sm:py-2 text-sm font-semibold rounded-t-lg transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${activeTab === tabName ? 'bg-gray-800 text-cyan-400 border-t-2 border-cyan-500' : 'bg-transparent text-gray-400 hover:bg-gray-800/50 hover:text-white border-t-2 border-transparent'}`}
-        >
-            {children}
-        </button>
-    );
+    const handleEditMinutes = async (request: string) => {
+        if (!lastMeetingDetails) return;
+        setIsEditingMinutes(true);
+        setEditError(null);
+        try {
+            const html = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, request, selectedModel);
+            setMeetingMinutesHtml(html);
+        } catch (e: any) {
+            setEditError(e.message);
+        } finally {
+            setIsEditingMinutes(false);
+        }
+    }
+    
+    const handleSaveCurrentSession = () => {
+        if (!finalTranscription) return;
+        const newSession: SavedSession = {
+            id: Date.now().toString(),
+            createdAt: new Date().toISOString(),
+            name: lastMeetingDetails?.topic || "Untitled Session",
+            transcription: finalTranscription,
+            meetingMinutesHtml: meetingMinutesHtml,
+            meetingDetails: lastMeetingDetails || { topic: "Untitled", timeAndPlace: "", endTime: "", attendees: "", chair: "" }
+        };
+        setSavedSessions(prev => [newSession, ...prev]);
+        alert("Session saved to History!");
+    };
 
-    // --- AI Assistant Tool Execution Logic ---
-    const handleAiAction = useCallback(async (actionName: string, args: any) => {
+    const handleChatAction = async (actionName: string, args: any) => {
         switch (actionName) {
             case 'list_history':
                 return savedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
             case 'list_archive':
                 return archivedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
             case 'load_session':
-                const success = handleLoadSession(args.sessionId);
-                return success ? "Session loaded successfully." : "Session not found.";
+                const loaded = handleLoadSession(args.sessionId);
+                return loaded ? "Session loaded successfully." : "Session not found.";
             case 'archive_session':
                 const archived = handleArchiveSession(args.sessionId);
-                return archived ? "Session moved to archive." : "Session not found.";
+                return archived ? "Session archived." : "Session not found.";
             case 'edit_current_minutes':
-                if (!finalTranscription || !meetingMinutesHtml) {
-                    return "Error: No active meeting minutes to edit. Please load a session first.";
+                if (!meetingMinutesHtml || !lastMeetingDetails) return "No meeting minutes active to edit.";
+                try {
+                    const newHtml = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, args.instruction, selectedModel);
+                    setMeetingMinutesHtml(newHtml);
+                    return "Meeting minutes updated successfully.";
+                } catch (e: any) {
+                    return `Error updating minutes: ${e.message}`;
                 }
-                // Trigger the edit function
-                await handleRequestEdits(args.instruction);
-                return "Edit request submitted successfully.";
             default:
                 return "Unknown action.";
         }
-    }, [savedSessions, archivedSessions, handleLoadSession, handleArchiveSession, handleRequestEdits, finalTranscription, meetingMinutesHtml]);
+    };
 
-    // Compute simple context for AI
     const appContext = JSON.stringify({
-        currentTab: activeTab,
-        hasActiveSession: !!finalTranscription,
-        historyCount: savedSessions.length,
-        archiveCount: archivedSessions.length,
-        currentSessionName: lastMeetingDetails?.topic || "None"
+        hasTranscription: !!finalTranscription,
+        transcriptionPreview: finalTranscription.slice(0, 200),
+        hasMinutes: !!meetingMinutesHtml,
+        topic: lastMeetingDetails?.topic,
+        filesInQueue: fileQueue.length,
+        savedSessionsCount: savedSessions.length
     });
 
     return (
-        <div className="min-h-screen bg-gray-900 text-gray-100 font-sans antialiased selection:bg-cyan-500 selection:text-white pb-12">
-             <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-10 relative">
-                {/* Refresh Button */}
-                <div className="absolute top-6 right-4 sm:right-8 z-20">
-                    <button
-                        onClick={handleRefreshApp}
-                        className="flex items-center gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-600 transition-all shadow-sm backdrop-blur-sm group"
-                        title="Bắt đầu phiên mới (Xóa dữ liệu hiện tại)"
-                    >
-                        <RefreshIcon className="w-5 h-5 group-hover:rotate-180 transition-transform duration-500" />
-                        <span className="hidden sm:inline font-medium text-sm">Làm mới</span>
-                    </button>
+        <div key={refreshKey} className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white font-sans selection:bg-cyan-500 selection:text-white">
+            <header className="bg-gray-800/80 backdrop-blur-md sticky top-0 z-50 border-b border-gray-700 shadow-lg">
+                <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+                    <div className="flex items-center space-x-3">
+                        <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-2 rounded-lg shadow-lg shadow-cyan-500/20">
+                            <RefreshIcon className="w-6 h-6 text-white" />
+                        </div>
+                        <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                            Gemini Meeting Assistant
+                        </h1>
+                    </div>
+                    <div className="flex items-center gap-4">
+                         <a href="https://github.com/google/generative-ai-js" target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white transition-colors">
+                            <GithubIcon className="w-6 h-6" />
+                        </a>
+                    </div>
+                </div>
+                
+                {/* Navigation Tabs */}
+                <div className="max-w-7xl mx-auto px-4 flex space-x-6 overflow-x-auto">
+                    {[
+                        { id: 'file', label: 'File Upload' },
+                        { id: 'live', label: 'Live Recording' },
+                        { id: 'history', label: 'History' },
+                        { id: 'cloud', label: 'Cloud Storage' },
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id as any)}
+                            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                                activeTab === tab.id 
+                                ? 'border-cyan-500 text-cyan-400' 
+                                : 'border-transparent text-gray-400 hover:text-gray-200'
+                            }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+            </header>
+
+            <main className="max-w-7xl mx-auto px-4 py-8 space-y-8">
+                {/* Error Banner */}
+                {error && (
+                    <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded-lg flex justify-between items-center animate-shake">
+                        <span>{error}</span>
+                        <button onClick={() => setError(null)} className="text-red-400 hover:text-white font-bold">✕</button>
+                    </div>
+                )}
+
+                {/* Tab Content */}
+                <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl shadow-xl border border-gray-700 p-6 min-h-[500px]">
+                    {activeTab === 'file' && (
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative">
+                            <div className="lg:col-span-2 space-y-6">
+                                <FileUpload onFileSelect={handleFileSelect} disabled={isLoading} />
+                                <FileQueueList 
+                                    queue={fileQueue} 
+                                    onToggleSelect={handleToggleQueueItem} 
+                                    onRemove={handleRemoveQueueItem} 
+                                    disabled={isLoading} 
+                                />
+                                {fileQueue.some(q => q.status === 'completed') && (
+                                     <TranscriptionMerger queue={fileQueue} onMerge={handleMergeTranscription} />
+                                )}
+                            </div>
+                            
+                            {/* Unified Right Sidebar Control Panel - Sticky on Desktop */}
+                            <div className="lg:col-span-1">
+                                <div className="space-y-4 lg:sticky lg:top-8 bg-gray-900/50 p-4 rounded-xl border border-gray-700/50 shadow-inner">
+                                    <h3 className="text-gray-400 font-bold text-xs uppercase tracking-wider border-b border-gray-700 pb-2">
+                                        Cấu hình & Xử lý
+                                    </h3>
+                                    
+                                    <ModelSelector onModelChange={setSelectedModel} disabled={isLoading} initialModel={selectedModel} />
+                                    
+                                    <Options 
+                                        disabled={isLoading} 
+                                        options={processingOptions} 
+                                        onOptionChange={setProcessingOptions} 
+                                    />
+                                    
+                                    <div className="pt-2">
+                                        <button
+                                            onClick={handleProcessQueue}
+                                            disabled={isLoading || fileQueue.every(i => !i.isSelected || i.status === 'completed')}
+                                            className="w-full py-3.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg shadow-blue-900/30 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:transform-none"
+                                        >
+                                            {isLoading ? 'Processing...' : 'Start Processing Selected Files'}
+                                        </button>
+                                        
+                                        {isLoading && (
+                                            <div className="mt-4 space-y-3 p-3 bg-gray-800 rounded-lg border border-gray-700">
+                                                <ProgressBar progress={progress} message={statusMessage} />
+                                                <button onClick={handleCancel} className="text-red-400 text-xs hover:text-red-300 w-full text-center font-medium">
+                                                    Cancel Operation
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'live' && (
+                        <div className="max-w-2xl mx-auto text-center space-y-6">
+                            <h2 className="text-2xl font-bold text-white">Real-time Transcription</h2>
+                            <p className="text-gray-400">Use your microphone to transcribe meetings in real-time. Make sure to grant browser permissions.</p>
+                            <LiveTranscription onComplete={handleLiveTranscriptionComplete} disabled={isLoading} />
+                        </div>
+                    )}
+
+                    {activeTab === 'history' && (
+                        <SavedSessionsList 
+                            sessions={savedSessions} 
+                            onLoad={handleLoadSession} 
+                            onDelete={handleDeleteSession} 
+                            onArchive={handleArchiveSession}
+                            onPreview={handlePreviewSession}
+                            onImport={handleImportSession}
+                            disabled={isLoading} 
+                        />
+                    )}
+
+                    {activeTab === 'cloud' && (
+                        <CloudStorage 
+                            sessions={archivedSessions} 
+                            onLoad={handleLoadSession} 
+                            onDelete={handleDeleteArchivedSession} 
+                            onPreview={handlePreviewSession}
+                            onImportDatabase={handleImportDatabase}
+                            disabled={isLoading} 
+                        />
+                    )}
                 </div>
 
-                <header className="text-center mb-10">
-                    <h1 className="text-3xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500 tracking-tight pb-2">
-                        Gemini Meeting Assistant
-                    </h1>
-                    <p className="text-gray-400 mt-2 text-sm sm:text-base max-w-2xl mx-auto">
-                        Transcribe audio, analyze conversations, and generate professional minutes with AI.
-                    </p>
-                    <p className="text-cyan-500 font-medium mt-3 text-sm tracking-wide">
-                        Đây là sản phẩm của Mr Cường
-                    </p>
-                </header>
-                
-                <main className="space-y-8" key={refreshKey}>
-                     {/* ... (Existing Tabs and File Upload logic remains same) ... */}
-                     <div className="bg-gray-800 rounded-2xl shadow-xl border border-gray-700 overflow-hidden">
-                        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm">
-                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-cyan-900 text-cyan-400 text-xs">1</span>
-                                Input Source
-                            </h2>
-                            <span className="px-2 py-0.5 rounded text-xs font-mono bg-gray-700 text-gray-300">v2.2</span>
+                {/* Transcription Result & Diarization */}
+                {finalTranscription && (
+                    <div id="transcription-result-area" className="space-y-6 animate-fade-in-up">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-xl font-bold text-cyan-400">Transcription Result</h2>
+                            <button onClick={handleSaveCurrentSession} className="text-sm bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition">
+                                Save Session
+                            </button>
                         </div>
                         
-                        <div className="flex border-b border-gray-700 bg-gray-900/30 overflow-x-auto">
-                           <TabButton tabName="file">Upload Files</TabButton>
-                           <TabButton tabName="live">Live Audio</TabButton>
-                           <TabButton tabName="history">History</TabButton>
-                           <TabButton tabName="cloud">Cloud / Archive</TabButton>
-                        </div>
-
-                        <div className="p-6 sm:p-8 bg-gray-800 transition-all">
-                            {activeTab === 'file' ? (
-                                <div className="space-y-6">
-                                    <FileUpload onFileSelect={handleFileSelect} disabled={isBusy} />
-                                    <FileQueueList 
-                                        queue={fileQueue} 
-                                        onToggleSelect={handleToggleQueueItem}
-                                        onRemove={handleRemoveQueueItem}
-                                        disabled={isBusy} 
-                                    />
-                                </div>
-                            ) : activeTab === 'live' ? (
-                                <LiveTranscription onComplete={handleLiveTranscriptionComplete} disabled={isBusy} />
-                            ) : activeTab === 'history' ? (
-                                <SavedSessionsList
-                                    sessions={savedSessions}
-                                    onLoad={handleLoadSession}
-                                    onDelete={handleDeleteSession}
-                                    onArchive={handleArchiveSession}
-                                    onPreview={handlePreviewSession}
-                                    onImport={handleImportSession}
-                                    disabled={isBusy}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 space-y-4">
+                                <TranscriptionResult text={finalTranscription} />
+                                <SpeakerNamer 
+                                    transcription={finalTranscription} 
+                                    onUpdateTranscription={handleUpdateTranscription} 
+                                    disabled={isLoading} 
                                 />
-                            ) : (
-                                <CloudStorage
-                                    sessions={archivedSessions}
-                                    onLoad={handleLoadSession}
-                                    onDelete={handleDeleteArchivedSession}
-                                    onPreview={handlePreviewSession}
-                                    onImportDatabase={handleImportDatabase}
-                                    disabled={isBusy}
-                                />
-                            )}
-                        </div>
-                    </div>
-                    
-                    {activeTab === 'file' && (
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                             <div className="bg-gray-800 p-6 rounded-2xl shadow-lg border border-gray-700 flex flex-col h-full">
-                                <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-cyan-900 text-cyan-400 text-xs">2</span>
-                                    Audio Options
-                                </h2>
-                                <div className="flex-grow">
-                                    <Options 
-                                        disabled={isBusy} 
-                                        options={processingOptions}
-                                        onOptionChange={setProcessingOptions}
-                                    />
-                                </div>
                             </div>
-
-                             <div className="bg-gray-800 p-6 rounded-2xl shadow-lg border border-gray-700 flex flex-col h-full">
-                                <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-cyan-900 text-cyan-400 text-xs">3</span>
-                                    AI Model
-                                </h2>
-                                <div className="flex-grow">
-                                    <ModelSelector 
-                                        initialModel={selectedModel}
-                                        onModelChange={setSelectedModel} 
-                                        disabled={isBusy}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {activeTab === 'file' && (
-                         <div className="text-center py-2">
-                            <button
-                                onClick={handleProcessQueue}
-                                disabled={selectedCount === 0 || isBusy}
-                                className="w-full sm:w-auto px-10 py-4 bg-gradient-to-r from-cyan-600 to-cyan-500 text-white font-bold rounded-xl shadow-lg hover:shadow-cyan-500/20 hover:from-cyan-500 hover:to-cyan-400 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-all duration-300 transform hover:-translate-y-0.5 active:translate-y-0 disabled:translate-y-0 text-lg"
-                            >
-                                {isLoading 
-                                    ? 'Processing Queue...' 
-                                    : `▶️ Process ${selectedCount} Selected File(s)`}
-                            </button>
-                            {error && (
-                                <div className="mt-6 p-4 bg-red-900/30 border border-red-500/50 text-red-200 rounded-lg text-center backdrop-blur-sm animate-fade-in">
-                                    <p className="font-bold">Error encountered:</p>
-                                    <p className="text-sm opacity-90">{error}</p>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    
-                    {isLoading && (
-                         <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in">
                             <div className="space-y-4">
-                                <ProgressBar progress={progress} message={statusMessage} />
-                                <div className="text-center pt-2">
-                                    <button 
-                                        onClick={handleCancel}
-                                        className="px-6 py-2 bg-red-600/20 text-red-400 border border-red-900/50 font-semibold rounded-lg hover:bg-red-600/30 transition-all"
+                                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                                    <h3 className="text-md font-bold text-gray-200 mb-2 flex items-center gap-2">
+                                        <UsersIcon className="w-4 h-4" /> AI Speaker ID
+                                    </h3>
+                                    <p className="text-sm text-gray-400 mb-4">
+                                        Automatically identify and label different speakers in the text using AI.
+                                    </p>
+                                    <button
+                                        onClick={handleIdentifySpeakers}
+                                        disabled={isDiarizing || isLoading}
+                                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors disabled:bg-gray-600"
                                     >
-                                        Cancel Operation
+                                        {isDiarizing ? 'Identifying...' : 'Identify Speakers'}
                                     </button>
+                                    {isDiarizing && <div className="mt-3"><ProgressBar progress={diarizationProgress} message="Analyzing voices..." /></div>}
+                                    {diarizationError && <p className="text-red-400 text-xs mt-2">{diarizationError}</p>}
                                 </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Section 4: Transcription Results & Tools */}
-                    {(hasProcessedFiles || finalTranscription) && (
-                         <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl border border-gray-700 shadow-xl space-y-6" id="transcription-result-area">
-                            <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-gray-700 pb-4">
-                                <span className="flex items-center justify-center w-7 h-7 rounded-full bg-cyan-900 text-cyan-400 text-sm">4</span>
-                                Transcription &amp; Tools
-                            </h2>
-                            
-                            {activeTab === 'file' && hasProcessedFiles && (
-                                <TranscriptionMerger 
-                                    queue={fileQueue}
-                                    onMerge={handleMergeTranscription}
-                                />
-                            )}
-                            
-                            {finalTranscription && (
-                                <div className="space-y-6 animate-fade-in">
-                                    <div>
-                                        <div className="flex justify-between items-end mb-2">
-                                            <p className="text-sm font-semibold text-gray-300">Final Text (Editable)</p>
-                                        </div>
-                                        <TranscriptionResult text={finalTranscription} />
-                                    </div>
-
-                                    <div className="bg-gray-900/50 rounded-xl p-5 border border-gray-700">
-                                        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-4">
-                                            <div className="text-center sm:text-left">
-                                                <h3 className="font-semibold text-white">Speaker Identification</h3>
-                                                <p className="text-xs text-gray-400">Ask AI to label speakers (e.g., [SPEAKER 1] → John)</p>
-                                            </div>
-                                            <button
-                                                onClick={handleIdentifySpeakers}
-                                                disabled={isBusy}
-                                                className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 bg-yellow-600/90 hover:bg-yellow-600 text-white font-bold rounded-lg shadow hover:shadow-yellow-900/20 disabled:bg-gray-700 disabled:text-gray-500 transition-all"
-                                            >
-                                                <UsersIcon className="w-5 h-5" />
-                                                {isDiarizing ? 'Analyzing...' : 'Identify Speakers'}
-                                            </button>
-                                        </div>
-                                        
-                                        {isDiarizing && <div className="mt-3"><ProgressBar progress={diarizationProgress} message="Analyzing conversation patterns..." /></div>}
-                                        {diarizationError && <p className="text-red-400 mt-2 text-sm text-center">{diarizationError}</p>}
-                                        
-                                        <SpeakerNamer
-                                            transcription={finalTranscription}
-                                            onUpdateTranscription={handleUpdateTranscription}
-                                            disabled={isBusy}
-                                        />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-
-                    {/* Section 5: Minutes Generation */}
-                    {!isLoading && finalTranscription && (
-                         <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl border border-gray-700 shadow-xl space-y-6">
-                             <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-gray-700 pb-4">
-                                <span className="flex items-center justify-center w-7 h-7 rounded-full bg-purple-900 text-purple-400 text-sm">5</span>
-                                Generate Meeting Minutes
-                            </h2>
-                            
-                            {isGeneratingMinutes ? (
-                                    <div className="text-center space-y-4 p-8 bg-gray-900/30 rounded-xl border border-gray-700 border-dashed">
-                                    <ProgressBar progress={minutesGenerationProgress} message={minutesGenerationStatus} />
-                                    <button 
-                                        onClick={handleCancel}
-                                        className="px-6 py-2 bg-red-600/20 text-red-400 border border-red-900/50 font-semibold rounded-lg hover:bg-red-600/30 transition-all"
-                                    >
-                                        Cancel Generation
-                                    </button>
-                                </div>
-                            ) : (
-                                <>
-                                    <MeetingMinutesGenerator 
-                                        onSubmit={handleGenerateMinutes} 
-                                        disabled={isGeneratingMinutes || isEditingMinutes}
-                                        initialDetails={lastMeetingDetails}
-                                    />
-                                    {minutesError && <div className="p-4 bg-red-900/20 border border-red-500/30 text-red-300 rounded-lg text-center text-sm">{minutesError}</div>}
-                                </>
-                            )}
-                        </div>
-                    )}
-                    
-                    {!isGeneratingMinutes && meetingMinutesHtml && (
-                        <>
-                             <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl border border-gray-700 shadow-xl space-y-6">
-                                <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-gray-700 pb-4">
-                                    <span className="flex items-center justify-center w-7 h-7 rounded-full bg-purple-900 text-purple-400 text-sm">6</span>
-                                    Result
-                                </h2>
-                                <MeetingMinutesResult htmlContent={meetingMinutesHtml} />
-                            </div>
-                    
-                            <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl border border-gray-700 shadow-xl space-y-6">
-                                <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-gray-700 pb-4">
-                                    <span className="flex items-center justify-center w-7 h-7 rounded-full bg-green-900 text-green-400 text-sm">7</span>
-                                    AI Editor
-                                </h2>
-                                {isEditingMinutes ? (
-                                    <div className="text-center space-y-4 p-8 bg-gray-900/30 rounded-xl border border-gray-700 border-dashed">
-                                        <ProgressBar progress={editProgress} message={editStatusMessage} />
-                                        <button 
-                                            onClick={handleCancel}
-                                            className="px-6 py-2 bg-red-600/20 text-red-400 border border-red-900/50 font-semibold rounded-lg hover:bg-red-600/30 transition-all"
-                                        >
-                                            Cancel Edit
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <EditRequest
-                                        onSubmit={handleRequestEdits}
-                                        disabled={isEditingMinutes}
-                                    />
-                                )}
-                                {editError && <p className="text-red-400 mt-2 text-center text-sm">{editError}</p>}
-                            </div>
-                        </>
-                    )}
-                </main>
-                
-                 <footer className="text-center mt-12 pb-6 border-t border-gray-800 pt-8">
-                    <a href="https://github.com/google/gemini-api" target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-gray-500 hover:text-cyan-400 transition-colors gap-2 text-sm font-medium">
-                        <GithubIcon className="w-5 h-5" />
-                        Built with Google Gemini API
-                    </a>
-                </footer>
-                
-                {/* AI Chat Assistant */}
-                <ChatAssistant onExecuteAction={handleAiAction} appContext={appContext} />
-
-                {/* Preview Modal */}
-                {previewSession && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-                        <div className="bg-gray-800 w-full max-w-5xl h-[90vh] rounded-xl flex flex-col border border-gray-700 shadow-2xl">
-                            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-700 bg-gray-900/50 rounded-t-xl">
-                                <div>
-                                    <h3 className="text-lg font-bold text-white truncate max-w-lg">{previewSession.name}</h3>
-                                    <p className="text-xs text-gray-400">Xem trước biên bản</p>
-                                </div>
-                                <button 
-                                    onClick={() => setPreviewSession(null)}
-                                    className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
-                            </div>
-                            <div className="flex-1 overflow-hidden p-6 bg-gray-800">
-                                <MeetingMinutesResult 
-                                    htmlContent={previewSession.meetingMinutesHtml} 
-                                    className="h-full"
-                                />
                             </div>
                         </div>
                     </div>
                 )}
-            </div>
+
+                {/* Meeting Minutes Generation */}
+                {finalTranscription && (
+                    <div className="space-y-6 border-t border-gray-700 pt-8 animate-fade-in-up">
+                         <h2 className="text-xl font-bold text-purple-400">Meeting Minutes Generation</h2>
+                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div>
+                                <MeetingMinutesGenerator 
+                                    onSubmit={handleGenerateMinutes} 
+                                    disabled={isGeneratingMinutes} 
+                                    initialDetails={lastMeetingDetails}
+                                />
+                                {isGeneratingMinutes && <div className="mt-4"><ProgressBar progress={100} message="AI is writing the minutes..." /></div>}
+                                {minutesError && <p className="text-red-400 mt-2">{minutesError}</p>}
+                            </div>
+                            
+                            {meetingMinutesHtml && (
+                                <div className="space-y-4">
+                                    <MeetingMinutesResult htmlContent={meetingMinutesHtml} />
+                                    <EditRequest onSubmit={handleEditMinutes} disabled={isEditingMinutes} />
+                                    {isEditingMinutes && <p className="text-yellow-400 text-sm animate-pulse">AI is rewriting based on your request...</p>}
+                                    {editError && <p className="text-red-400 text-sm">{editError}</p>}
+                                </div>
+                            )}
+                         </div>
+                    </div>
+                )}
+            </main>
+
+            {/* Chat Assistant */}
+            <ChatAssistant onExecuteAction={handleChatAction} appContext={appContext} />
+
+            {/* Preview Modal */}
+            {previewSession && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                    <div className="bg-gray-900 w-full max-w-4xl h-[90vh] rounded-2xl border border-gray-700 flex flex-col shadow-2xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
+                            <h3 className="font-bold text-lg text-white">{previewSession.name}</h3>
+                            <button onClick={() => setPreviewSession(null)} className="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
+                        </div>
+                        <div className="flex-1 overflow-auto bg-white p-0">
+                            <iframe
+                                srcDoc={previewSession.meetingMinutesHtml}
+                                title="Preview"
+                                className="w-full h-full border-0"
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

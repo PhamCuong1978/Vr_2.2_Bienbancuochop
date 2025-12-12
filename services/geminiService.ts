@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Modality, FunctionDeclaration, Type, Chat } from "@google/genai";
 import { MeetingDetails } from "../components/MeetingMinutesGenerator";
 import { ProcessingOptions } from "../components/Options";
@@ -114,7 +113,14 @@ YÊU CẦU QUAN TRỌNG:
             textPrompt += `
 3. NHẬN DIỆN NGƯỜI NÓI (Speaker Diarization):
    - Phân biệt các giọng nói khác nhau.
-   - Bắt đầu mỗi lượt lời bằng nhãn: "[NGƯỜI NÓI 1]:", "[NGƯỜI NÓI 2]:",...
+   - Bắt đầu mỗi lượt lời bằng nhãn: "[NGƯỜI NÓI 1]:", "[NGƯỜI NÓI 2]:",...`;
+   
+            if (options.speakerCount) {
+                textPrompt += `
+   - LƯU Ý QUAN TRỌNG: Cuộc họp này có khoảng ${options.speakerCount} người tham gia. Hãy cố gắng nhận diện và gom nhóm giọng nói về số lượng này, tránh tạo ra quá nhiều người nói ảo.`;
+            }
+
+            textPrompt += `
    - Không gộp lời của nhiều người vào một đoạn.
    - Ghi lại nguyên văn lời nói (Verbatim).`;
         } else {
@@ -138,14 +144,14 @@ YÊU CẦU QUAN TRỌNG:
     }
 };
 
-export const identifySpeakers = async (transcription: string, modelName: string): Promise<string> => {
+export const identifySpeakers = async (transcription: string, modelName: string, speakerCount?: number): Promise<string> => {
     const apiKey = getApiKey();
     if (!apiKey) {
          throw new Error("API_KEY is not configured. Please set VITE_API_KEY in your environment variables.");
     }
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `Bạn là chuyên gia phân tích hội thoại Tiếng Việt.
+    let prompt = `Bạn là chuyên gia phân tích hội thoại Tiếng Việt.
 Văn bản dưới đây là nội dung cuộc họp nhưng chưa phân rõ người nói hoặc nhãn chưa chuẩn.
 
 Nhiệm vụ:
@@ -154,7 +160,14 @@ Nhiệm vụ:
 3.  **Định dạng:** 
     -   Mỗi lượt lời xuống dòng riêng biệt.
     -   GIỮ NGUYÊN VĂN nội dung nói, không tóm tắt hay thay đổi từ ngữ.
-    -   Đảm bảo toàn bộ văn bản đầu ra là Tiếng Việt.
+    -   Đảm bảo toàn bộ văn bản đầu ra là Tiếng Việt.`;
+
+    if (speakerCount) {
+        prompt += `
+4.  **SỐ LƯỢNG NGƯỜI:** Cuộc họp có khoảng ${speakerCount} người. Hãy cố gắng phân bổ các lượt lời cho đúng số lượng này.`;
+    }
+
+    prompt += `
 
 Văn bản cần xử lý:
 ---
@@ -222,6 +235,10 @@ C. KẾT LUẬN CHUNG & CHỈ ĐẠO
 D. PHÂN CÔNG THỰC HIỆN (Action Plan)
 -   Lập bảng chi tiết: [STT | Nội dung công việc | Người/Bộ phận chịu trách nhiệm | Thời hạn hoàn thành | Ghi chú].
 
+**QUAN TRỌNG - PHẦN KẾT THÚC:**
+Ngay trước phần chữ ký, BẮT BUỘC phải có đoạn văn sau (in nghiêng nếu có thể):
+"Cuộc họp kết thúc vào lúc ${details.endTime || '[...h...]'} cùng ngày. Biên bản này được lập và thông qua bởi tất cả các thành viên tham dự."
+
 E. KÝ DUYỆT
 (Khu vực ký của Thư ký và Chủ tọa).
 
@@ -238,6 +255,7 @@ E. KÝ DUYỆT
     -   **Th (Table Header):** Background-color: #f0f4f8; border: 1px solid #a0aec0; padding: 12px; text-align: left; font-weight: bold; color: #2d3748;
     -   **Td (Table Data):** Border: 1px solid #cbd5e0; padding: 12px; vertical-align: top;
     -   **Strong/Bold:** Color: #2d3748;
+    -   **Phần kết thúc:** Font-style: italic; margin-top: 30px; margin-bottom: 30px;
 -   Nội dung phần B phải chiếm tỷ trọng lớn nhất và thể hiện được sự sâu sắc của cuộc họp.`;
     
     const fullPrompt = `${promptTemplate}
@@ -248,7 +266,8 @@ ${transcription}
 ---
 
 Thông tin bổ sung (Metadata):
-- Thời gian & địa điểm: ${details.timeAndPlace || '(không có)'}
+- Thời gian bắt đầu & địa điểm: ${details.timeAndPlace || '(không có)'}
+- Thời gian kết thúc: ${details.endTime || '(tự động xác định nếu có)'}
 - Thành phần tham dự: ${details.attendees || '(không có)'}
 - Chủ trì: ${details.chair || '(không có)'}
 - Chủ đề cho dòng V/v: ${details.topic}

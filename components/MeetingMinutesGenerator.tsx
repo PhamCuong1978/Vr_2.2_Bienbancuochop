@@ -49,6 +49,7 @@ declare global {
 
 export interface MeetingDetails {
     timeAndPlace: string;
+    endTime: string;
     attendees: string;
     chair: string;
     topic: string;
@@ -102,6 +103,7 @@ const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSub
     // Set default topic to "Biên bản họp"
     const [details, setDetails] = useState<MeetingDetails>({
         timeAndPlace: '',
+        endTime: '',
         attendees: '',
         chair: '',
         topic: 'Biên bản họp',
@@ -234,10 +236,11 @@ const MeetingMinutesGenerator: React.FC<MeetingMinutesGeneratorProps> = ({ onSub
         <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-gray-700/50 rounded-lg">
             <p className="text-sm text-gray-400">Điền thông tin chi tiết (tùy chọn). AI sẽ tự động điền các thông tin còn thiếu từ bản ghi âm. Nhấn vào biểu tượng micro để nhập bằng giọng nói (Tiếng Việt).</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {renderInputField('timeAndPlace', 'Thời gian & Địa điểm', "VD: 14h, 26/10/2023, Phòng họp 4")}
-                {renderInputField('attendees', 'Thành phần tham dự', "VD: Nguyễn Văn A, Trần Thị B, Team Marketing")}
-                {renderInputField('chair', 'Chủ trì', "VD: Nguyễn Văn A")}
-                {renderInputField('topic', 'Chủ đề / Mục đích cuộc họp', "VD: Chiến lược Marketing Q4")}
+                {renderInputField('timeAndPlace', 'Thời gian & Địa điểm', "VD: 09h00, ngày 01/12/2025")}
+                {renderInputField('attendees', 'Thành phần tham dự', "VD: Nguyễn Văn A, Trần Thị B")}
+                {renderInputField('chair', 'Chủ trì', "VD: Ông Quý")}
+                {renderInputField('topic', 'Chủ đề / Mục đích cuộc họp', "VD: Hợp tác kinh doanh")}
+                {renderInputField('endTime', 'Thời gian kết thúc', "VD: 11h30")}
             </div>
             <div className="text-center pt-2">
                 <button
