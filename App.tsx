@@ -131,6 +131,7 @@ const App: React.FC = () => {
     const [isEditingMinutes, setIsEditingMinutes] = useState<boolean>(false);
     const [editError, setEditError] = useState<string | null>(null);
 
+    // Diarization states kept for future use if needed, but UI removed
     const [isDiarizing, setIsDiarizing] = useState<boolean>(false);
     const [diarizationError, setDiarizationError] = useState<string | null>(null);
     const [diarizationProgress, setDiarizationProgress] = useState(0);
@@ -411,6 +412,8 @@ const App: React.FC = () => {
 
     const handleUpdateTranscription = (newText: string) => setFinalTranscription(newText);
 
+    // This function is technically redundant now that the UI button is removed,
+    // but kept in case we want to re-enable manual triggering later.
     const handleIdentifySpeakers = useCallback(async () => {
         if (!finalTranscription) return;
         setIsDiarizing(true);
@@ -585,21 +588,10 @@ const App: React.FC = () => {
                             <h2 className="text-xl font-bold text-cyan-400">Transcription Result</h2>
                             <button onClick={handleSaveCurrentSession} className="text-sm bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition">Save Session</button>
                         </div>
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                            <div className="lg:col-span-2 space-y-4">
-                                <TranscriptionResult text={finalTranscription} />
-                                <SpeakerNamer transcription={finalTranscription} onUpdateTranscription={handleUpdateTranscription} disabled={isLoading} />
-                            </div>
-                            <div className="space-y-4">
-                                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
-                                    <h3 className="text-md font-bold text-gray-200 mb-2 flex items-center gap-2"><UsersIcon className="w-4 h-4" /> AI Speaker ID</h3>
-                                    <button onClick={handleIdentifySpeakers} disabled={isDiarizing || isLoading} className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors disabled:bg-gray-600">
-                                        {isDiarizing ? 'Identifying...' : 'Identify Speakers'}
-                                    </button>
-                                    {isDiarizing && <div className="mt-3"><ProgressBar progress={diarizationProgress} message="Analyzing voices..." /></div>}
-                                    {diarizationError && <p className="text-red-400 text-xs mt-2">{diarizationError}</p>}
-                                </div>
-                            </div>
+                        {/* Modified layout: Removed the right sidebar, effectively making this full-width stack */}
+                        <div className="space-y-4">
+                            <TranscriptionResult text={finalTranscription} />
+                            <SpeakerNamer transcription={finalTranscription} onUpdateTranscription={handleUpdateTranscription} disabled={isLoading} />
                         </div>
                     </div>
                 )}
