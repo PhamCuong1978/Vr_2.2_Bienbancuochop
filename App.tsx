@@ -103,7 +103,7 @@ const App: React.FC = () => {
     const [refreshKey, setRefreshKey] = useState(0);
     const [activeTab, setActiveTab] = useState<'file' | 'live' | 'history' | 'cloud'>('file');
     const [fileQueue, setFileQueue] = useState<QueueItem[]>([]);
-    const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-pro');
+    const [selectedModel, setSelectedModel] = useState<string>('gemini-2.0-flash');
     const [finalTranscription, setFinalTranscription] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [progress, setProgress] = useState<number>(0);

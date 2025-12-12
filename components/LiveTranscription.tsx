@@ -86,8 +86,9 @@ const LiveTranscription: React.FC<LiveTranscriptionProps> = ({ onComplete, disab
             const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             audioContextRef.current = audioContext;
 
+            // Updated to use 2.0 Flash Exp which is generally available for Live API testing
             sessionPromiseRef.current = ai.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                model: 'gemini-2.0-flash-exp',
                 callbacks: {
                     onopen: () => {
                         if (!audioContextRef.current || !streamRef.current) return;

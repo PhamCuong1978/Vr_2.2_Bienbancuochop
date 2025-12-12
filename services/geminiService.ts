@@ -68,11 +68,10 @@ const rotateKey = () => {
     console.log(`⚠️ Quota hit. Rotating to API Key #${currentKeyIndex + 1}`);
 };
 
-// Fallback mapping
+// Fallback mapping: Defines what to use if the primary model fails/exhausts quota
 const FALLBACK_MODEL_MAP: Record<string, string> = {
-    'gemini-2.5-pro': 'gemini-2.5-flash',
-    'gemini-1.5-pro': 'gemini-1.5-flash',
-    // Add others if needed
+    'gemini-1.5-pro': 'gemini-2.0-flash', // If Pro fails, use 2.0 Flash (very good)
+    'gemini-2.0-flash': 'gemini-1.5-flash', // If 2.0 Flash fails, use 1.5 Flash (cheapest)
 };
 
 // --- Smart Execution Logic ---
@@ -110,17 +109,21 @@ const executeGeminiCall = async <T>(
             const message = error?.message?.toLowerCase() || '';
             const status = error?.status;
             
-            // Check for Quota (429) or Auth errors
+            // Check for Quota (429), Auth, or Not Found (404 - usually invalid model name)
             const isQuotaError = message.includes('429') || 
                                  message.includes('quota') || 
                                  message.includes('resource_exhausted') || 
                                  status === 'RESOURCE_EXHAUSTED';
             
             const isAuthError = message.includes('api key not valid') || message.includes('403');
+            const isModelNotFoundError = message.includes('not found') || message.includes('404');
 
             // If it's a critical API error, try to rotate
-            if (isQuotaError || isAuthError) {
+            if (isQuotaError || isAuthError || isModelNotFoundError) {
                 console.warn(`Error on Key #${currentKeyIndex + 1} (${effectiveModel}): ${message}.`);
+                
+                // If model not found, immediate fallback without key rotation might be smarter, 
+                // but let's stick to rotation + fallback logic to be safe.
                 
                 // 1. Rotate Key first
                 const previousKeyIndex = currentKeyIndex;
@@ -288,14 +291,16 @@ Chỉ trả về HTML mới.`;
     }
 };
 
-// Live Transcription cannot easily use key rotation mid-stream, so it just uses the current best key
+// Live Transcription uses the dedicated 2.0 Flash endpoint
 export const liveTranscriptionSession = async (callbacks: any) => {
     const key = getCurrentApiKey();
     if (!key) throw new Error("API_KEY not found");
     const ai = new GoogleGenAI({ apiKey: key });
     
+    // NOTE: 'gemini-2.0-flash-exp' is the current valid preview model for Live API
+    // If 'gemini-2.0-flash-exp' is unavailable, try 'gemini-2.0-flash-001'
     return ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: 'gemini-2.0-flash-exp', 
         callbacks,
         config: {
              responseModalities: [Modality.AUDIO], 
@@ -304,13 +309,13 @@ export const liveTranscriptionSession = async (callbacks: any) => {
     });
 }
 
-// Chat Assistant
+// Chat Assistant uses 2.0 Flash for speed
 export const startChatSession = (history: any[] = []) => {
     const key = getCurrentApiKey();
     if (!key) throw new Error("API_KEY not configured");
     const ai = new GoogleGenAI({ apiKey: key });
     
-    // Tools Definition (Simplified for brevity, ensuring imports are there)
+    // Tools Definition (Simplified)
     const listHistoryTool: FunctionDeclaration = { name: "list_history", description: "List saved sessions." };
     const listArchiveTool: FunctionDeclaration = { name: "list_archive", description: "List archived sessions." };
     const loadSessionTool: FunctionDeclaration = { name: "load_session", description: "Load session.", parameters: { type: Type.OBJECT, properties: { sessionId: { type: Type.STRING } } } };
@@ -318,7 +323,7 @@ export const startChatSession = (history: any[] = []) => {
     const editCurrentMinutesTool: FunctionDeclaration = { name: "edit_current_minutes", description: "Edit minutes.", parameters: { type: Type.OBJECT, properties: { instruction: { type: Type.STRING } } } };
 
     return ai.chats.create({
-        model: "gemini-2.5-flash",
+        model: "gemini-2.0-flash",
         history: history,
         config: {
             tools: [{ functionDeclarations: [listHistoryTool, listArchiveTool, loadSessionTool, archiveSessionTool, editCurrentMinutesTool] }],

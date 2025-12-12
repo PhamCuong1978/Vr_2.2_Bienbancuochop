@@ -8,15 +8,16 @@ interface ModelSelectorProps {
 }
 
 const models = [
-    { id: 'gemini-2.5-flash', name: 'Flash (Fast & Efficient)' },
-    { id: 'gemini-2.5-pro', name: 'Pro (Highest Quality)' },
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Mới nhất - Nhanh & Thông minh)' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Suy luận phức tạp - Deep Reasoning)' },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Tiết kiệm - Ổn định)' },
 ];
 
 const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, disabled, initialModel }) => {
     return (
         <div className="p-4 bg-gray-700/50 rounded-lg">
             <label htmlFor="model-select" className="block text-sm font-medium text-gray-300 mb-2">
-                Choose the AI model. "Pro" offers higher accuracy but may be slower.
+                Chọn Model xử lý. Khuyên dùng "Gemini 2.0 Flash" cho tốc độ và chất lượng cân bằng nhất.
             </label>
             <select
                 id="model-select"
