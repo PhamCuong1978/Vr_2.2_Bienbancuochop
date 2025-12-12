@@ -1,12 +1,12 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { transcribeAudio, generateMeetingMinutes, regenerateMeetingMinutes, identifySpeakers } from './services/geminiService';
+import { transcribeAudio, generateMeetingMinutes, regenerateMeetingMinutes, identifySpeakers, subscribeToStatus } from './services/geminiService';
 import { processAudio } from './services/audioProcessor';
 import FileUpload from './components/FileUpload';
 import Options, { ProcessingOptions } from './components/Options';
 import TranscriptionResult from './components/TranscriptionResult';
 import ProgressBar from './components/ProgressBar';
-import { GithubIcon, UsersIcon, RefreshIcon } from './components/icons';
+import { GithubIcon, UsersIcon, RefreshIcon, SparklesIcon } from './components/icons';
 import ModelSelector from './components/ModelSelector';
 import MeetingMinutesGenerator, { MeetingDetails } from './components/MeetingMinutesGenerator';
 import MeetingMinutesResult from './components/MeetingMinutesResult';
@@ -24,22 +24,16 @@ const extractTopicFromHtml = (htmlContent: string): string | null => {
     try {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = htmlContent;
-        
-        // Find all text nodes in the document body to search for the topic label
         const walker = document.createTreeWalker(tempDiv, NodeFilter.SHOW_TEXT, null);
         let node;
         while ((node = walker.nextNode())) {
             const nodeText = node.textContent || '';
             if (nodeText.includes('Chủ đề / Mục đích cuộc họp') || nodeText.includes('V/v:')) {
-                // Regex for "Chủ đề / Mục đích cuộc họp: [Content]" OR "(V/v: [Content])"
                 const match = nodeText.match(/(?:Chủ đề \/ Mục đích cuộc họp:|V\/v:)\s*(.+?)(\)|$)/);
-
                 if (match && match[1].trim()) {
                     const topic = match[1].trim();
                      if (!topic.toLowerCase().includes('(not provided)')) return topic.replace(/[()]/g, '');
                 }
-                
-                // Case 2: Topic is in the next element sibling
                 let parent = node.parentElement;
                 let nextElement = parent?.nextElementSibling;
                 while (nextElement) {
@@ -57,13 +51,11 @@ const extractTopicFromHtml = (htmlContent: string): string | null => {
     return null;
 };
 
-// Helper to extract end time from the closing sentence
 const extractEndTime = (html: string): string => {
     try {
          const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
         const text = tempDiv.innerText || tempDiv.textContent || '';
-        // Match: "Cuộc họp kết thúc vào lúc [time] cùng ngày"
         const match = text.match(/Cuộc họp kết thúc vào lúc\s*(.*?)(?=\s*(cùng ngày|\.|$))/i);
         return match ? match[1].trim() : '';
     } catch(e) {
@@ -71,13 +63,10 @@ const extractEndTime = (html: string): string => {
     }
 };
 
-// Helper to parse Meeting Details from HTML for import
 const parseMeetingDetailsFromHtml = (html: string): MeetingDetails => {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
     const text = tempDiv.innerText || tempDiv.textContent || '';
-    
-    // Helper to find text after a keyword line
     const extract = (keywords: string[]) => {
         for (const kw of keywords) {
             const regex = new RegExp(`${kw}.*?[:\\.]\\s*(.*?)(?=(?:\\n|$))`, 'i');
@@ -121,6 +110,9 @@ const App: React.FC = () => {
     const [statusMessage, setStatusMessage] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
 
+    // --- Status State ---
+    const [apiStatus, setApiStatus] = useState<{ keyIndex: number; model: string; isFallback: boolean } | null>(null);
+
     const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>({
         convertToMono16kHz: true,
         noiseReduction: true,
@@ -152,32 +144,26 @@ const App: React.FC = () => {
     useEffect(() => {
         try {
             const savedHistory = localStorage.getItem(HISTORY_KEY);
-            if (savedHistory) {
-                setSavedSessions(JSON.parse(savedHistory));
-            }
+            if (savedHistory) setSavedSessions(JSON.parse(savedHistory));
             const savedArchive = localStorage.getItem(ARCHIVE_KEY);
-            if (savedArchive) {
-                setArchivedSessions(JSON.parse(savedArchive));
-            }
+            if (savedArchive) setArchivedSessions(JSON.parse(savedArchive));
         } catch (error) {
             console.error("Failed to load history from localStorage", error);
         }
+
+        // Subscribe to Gemini Service Status
+        const unsubscribe = subscribeToStatus((status) => {
+            setApiStatus(status);
+        });
+        return () => unsubscribe();
     }, []);
 
     useEffect(() => {
-        try {
-            localStorage.setItem(HISTORY_KEY, JSON.stringify(savedSessions));
-        } catch (error) {
-            console.error("Failed to save history to localStorage", error);
-        }
+        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(savedSessions)); } catch (error) { console.error("Failed to save history", error); }
     }, [savedSessions]);
     
     useEffect(() => {
-        try {
-            localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archivedSessions));
-        } catch (error) {
-            console.error("Failed to save archive to localStorage", error);
-        }
+        try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archivedSessions)); } catch (error) { console.error("Failed to save archive", error); }
     }, [archivedSessions]);
 
     const resetState = () => {
@@ -240,9 +226,7 @@ const App: React.FC = () => {
     };
 
     const handleToggleQueueItem = (id: string) => {
-        setFileQueue(prev => prev.map(item => 
-            item.id === id ? { ...item, isSelected: !item.isSelected } : item
-        ));
+        setFileQueue(prev => prev.map(item => item.id === id ? { ...item, isSelected: !item.isSelected } : item));
     };
 
     const handleRemoveQueueItem = (id: string) => {
@@ -261,22 +245,11 @@ const App: React.FC = () => {
             setIsLoading(false);
             setProgress(0);
             setStatusMessage('Processing cancelled by user.');
-            setFileQueue(prev => prev.map(item => 
-                item.status === 'processing' ? { ...item, status: 'idle' } : item
-            ));
+            setFileQueue(prev => prev.map(item => item.status === 'processing' ? { ...item, status: 'idle' } : item));
         }
-        if (isGeneratingMinutes) {
-            setIsGeneratingMinutes(false);
-            setMinutesError('Minute generation cancelled by user.');
-        }
-        if (isEditingMinutes) {
-            setIsEditingMinutes(false);
-            setEditError('Edit request cancelled by user.');
-        }
-        if (isDiarizing) {
-            setIsDiarizing(false);
-            setDiarizationError('Speaker identification cancelled by user.');
-        }
+        if (isGeneratingMinutes) { setIsGeneratingMinutes(false); setMinutesError('Minute generation cancelled by user.'); }
+        if (isEditingMinutes) { setIsEditingMinutes(false); setEditError('Edit request cancelled by user.'); }
+        if (isDiarizing) { setIsDiarizing(false); setDiarizationError('Speaker identification cancelled by user.'); }
     };
 
     const handleLoadSession = useCallback((sessionId: string) => {
@@ -293,9 +266,7 @@ const App: React.FC = () => {
         return false;
     }, [savedSessions, archivedSessions]);
     
-    const handlePreviewSession = (session: SavedSession) => {
-        setPreviewSession(session);
-    };
+    const handlePreviewSession = (session: SavedSession) => { setPreviewSession(session); };
 
     const handleDeleteSession = (sessionId: string) => {
         if (window.confirm("Bạn có chắc chắn muốn xóa phiên đã lưu này không? Hành động này không thể hoàn tác.")) {
@@ -326,15 +297,13 @@ const App: React.FC = () => {
             if (Array.isArray(importedData)) {
                 const currentIds = new Set(archivedSessions.map(s => s.id));
                 const newItems = importedData.filter(s => !currentIds.has(s.id));
-                
                 setArchivedSessions(prev => [...newItems, ...prev]);
                 alert(`Đã khôi phục thành công ${newItems.length} biên bản.`);
             } else {
-                alert("File không hợp lệ. Vui lòng chọn file JSON được xuất từ ứng dụng này.");
+                alert("File không hợp lệ.");
             }
         } catch (e) {
-            console.error("Import failed", e);
-            alert("Lỗi khi đọc file. File có thể bị hỏng hoặc sai định dạng.");
+            alert("Lỗi khi đọc file.");
         }
     };
 
@@ -350,28 +319,20 @@ const App: React.FC = () => {
                     id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
                     createdAt: new Date().toISOString(),
                     name: `${extractedTopic} (Đã nhập)`,
-                    transcription: "Phiên này được nhập từ file HTML. Dữ liệu lời thoại gốc không khả dụng để chỉnh sửa AI.",
+                    transcription: "Phiên này được nhập từ file HTML.",
                     meetingMinutesHtml: text,
                     meetingDetails: details,
                 };
                 newSessions.push(newSession);
-            } catch (err) {
-                console.error("Error parsing imported file:", file.name, err);
-            }
+            } catch (err) { console.error(err); }
         }
-        if (newSessions.length > 0) {
-            setSavedSessions(prev => [...newSessions, ...prev]);
-        }
+        if (newSessions.length > 0) setSavedSessions(prev => [...newSessions, ...prev]);
     };
 
 
     const handleProcessQueue = useCallback(async () => {
         const itemsToProcess = fileQueue.filter(item => item.isSelected && item.status !== 'completed');
-
-        if (itemsToProcess.length === 0) {
-            setError("Please select at least one pending file to process.");
-            return;
-        }
+        if (itemsToProcess.length === 0) { setError("Please select at least one pending file to process."); return; }
 
         setIsLoading(true);
         cancelRequestRef.current = false;
@@ -390,7 +351,7 @@ const App: React.FC = () => {
 
                 try {
                     let resultText = '';
-                    const isHtml = item.file.type === 'text/html' || item.file.name.toLowerCase().endsWith('.html') || item.file.name.toLowerCase().endsWith('.htm');
+                    const isHtml = item.file.type === 'text/html' || item.file.name.toLowerCase().endsWith('.html');
 
                     if (isHtml) {
                         const htmlContent = await item.file.text();
@@ -398,54 +359,39 @@ const App: React.FC = () => {
                         tempDiv.innerHTML = htmlContent;
                         resultText = tempDiv.textContent || tempDiv.innerText || "";
                         resultText = resultText.replace(/\s+/g, ' ').trim();
-                    } else if (item.file.type.startsWith('text/') || item.file.name.toLowerCase().endsWith('.txt') || item.file.name.toLowerCase().endsWith('.md')) {
+                    } else if (item.file.type.startsWith('text/') || item.file.name.toLowerCase().endsWith('.txt')) {
                         resultText = await item.file.text();
                     } else if (item.file.type.startsWith('audio/')) {
                         let fileToProcess = item.file;
                         const { identifySpeakers, speakerCount, ...audioOptions } = processingOptions;
-                        const isAnyAudioOptionEnabled = Object.values(audioOptions).some(option => option === true);
-
-                        if (isAnyAudioOptionEnabled) {
-                            try {
-                                fileToProcess = await processAudio(item.file, processingOptions);
-                            } catch (conversionError: any) {
-                                console.warn(`Audio processing failed for ${item.file.name}, proceeding with original file.`);
-                            }
+                        if (Object.values(audioOptions).some(o => o)) {
+                            try { fileToProcess = await processAudio(item.file, processingOptions); } catch (e) { console.warn(e); }
                         }
-
                         if (cancelRequestRef.current) break;
+                        if (fileToProcess.size > 20 * 1024 * 1024) throw new Error("File chunk is too large.");
                         
-                        if (fileToProcess.size > 15 * 1024 * 1024) {
-                             throw new Error("File chunk is too large for the API after processing. Please try smaller files.");
-                        }
-
                         await new Promise(res => setTimeout(res, 100));
                         resultText = await transcribeAudio(fileToProcess, selectedModel, processingOptions);
-                    } else {
-                         resultText = `[Skipped unsupported file type: ${item.file.type}]`;
                     }
 
                     if (cancelRequestRef.current) break;
+                    setFileQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'completed', transcription: resultText } : q));
 
-                    setFileQueue(prev => prev.map(q => 
-                        q.id === item.id ? { ...q, status: 'completed', transcription: resultText } : q
-                    ));
-
+                    if (i < itemsToProcess.length - 1) {
+                         const delayMs = 5000;
+                         setStatusMessage(`Waiting ${delayMs/1000}s before next file to respect API quota...`);
+                         await new Promise(resolve => setTimeout(resolve, delayMs));
+                    }
                 } catch (itemError: any) {
                     console.error(`Error processing item ${item.id}:`, itemError);
-                    let errMsg = itemError.message || "An unknown error occurred.";
-                    setFileQueue(prev => prev.map(q => 
-                        q.id === item.id ? { ...q, status: 'error', errorMsg: errMsg } : q
-                    ));
+                    setFileQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', errorMsg: itemError.message } : q));
                 }
             }
-            
             setProgress(100);
-            setStatusMessage('Queue processing finished. Please select files to merge below.');
-
-        } catch (err) {
+            setStatusMessage('Queue processing finished.');
+        } catch (err: any) {
             if (cancelRequestRef.current) return;
-            setError(err instanceof Error ? err.message : "An unknown error occurred.");
+            setError(err.message);
         } finally {
             setIsLoading(false);
         }
@@ -453,32 +399,19 @@ const App: React.FC = () => {
 
     const handleMergeTranscription = (mergedText: string) => {
         setFinalTranscription(mergedText);
-        setTimeout(() => {
-            const el = document.getElementById('transcription-result-area');
-            if (el) el.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
+        setTimeout(() => document.getElementById('transcription-result-area')?.scrollIntoView({ behavior: 'smooth' }), 100);
     };
 
-    const handleUpdateTranscription = (newText: string) => {
-        setFinalTranscription(newText);
-    };
+    const handleUpdateTranscription = (newText: string) => setFinalTranscription(newText);
 
     const handleIdentifySpeakers = useCallback(async () => {
-        if (!finalTranscription) {
-            setDiarizationError("A transcription must exist before identifying speakers.");
-            return;
-        }
-
+        if (!finalTranscription) return;
         setIsDiarizing(true);
         cancelRequestRef.current = false;
         setDiarizationError(null);
         setDiarizationProgress(0);
-
         const intervalId = window.setInterval(() => {
-            if (cancelRequestRef.current) {
-                clearInterval(intervalId);
-                return;
-            }
+            if (cancelRequestRef.current) { clearInterval(intervalId); return; }
             setDiarizationProgress(prev => (prev >= 90 ? prev : prev + 5));
         }, 1000);
 
@@ -489,7 +422,7 @@ const App: React.FC = () => {
             setFinalTranscription(diarizedText);
         } catch (err: any) {
              clearInterval(intervalId);
-             setDiarizationError(err.message || "Failed to identify speakers.");
+             setDiarizationError(err.message);
         } finally {
             setIsDiarizing(false);
         }
@@ -502,11 +435,7 @@ const App: React.FC = () => {
         try {
              const html = await generateMeetingMinutes(finalTranscription, details, selectedModel);
              setMeetingMinutesHtml(html);
-        } catch (e: any) {
-            setMinutesError(e.message);
-        } finally {
-            setIsGeneratingMinutes(false);
-        }
+        } catch (e: any) { setMinutesError(e.message); } finally { setIsGeneratingMinutes(false); }
     };
 
     const handleEditMinutes = async (request: string) => {
@@ -516,11 +445,7 @@ const App: React.FC = () => {
         try {
             const html = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, request, selectedModel);
             setMeetingMinutesHtml(html);
-        } catch (e: any) {
-            setEditError(e.message);
-        } finally {
-            setIsEditingMinutes(false);
-        }
+        } catch (e: any) { setEditError(e.message); } finally { setIsEditingMinutes(false); }
     }
     
     const handleSaveCurrentSession = () => {
@@ -539,38 +464,22 @@ const App: React.FC = () => {
 
     const handleChatAction = async (actionName: string, args: any) => {
         switch (actionName) {
-            case 'list_history':
-                return savedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
-            case 'list_archive':
-                return archivedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
-            case 'load_session':
-                const loaded = handleLoadSession(args.sessionId);
-                return loaded ? "Session loaded successfully." : "Session not found.";
-            case 'archive_session':
-                const archived = handleArchiveSession(args.sessionId);
-                return archived ? "Session archived." : "Session not found.";
+            case 'list_history': return savedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
+            case 'list_archive': return archivedSessions.map(s => ({ id: s.id, name: s.name, date: s.createdAt }));
+            case 'load_session': return handleLoadSession(args.sessionId) ? "Loaded." : "Not found.";
+            case 'archive_session': return handleArchiveSession(args.sessionId) ? "Archived." : "Not found.";
             case 'edit_current_minutes':
-                if (!meetingMinutesHtml || !lastMeetingDetails) return "No meeting minutes active to edit.";
+                if (!meetingMinutesHtml || !lastMeetingDetails) return "No minutes.";
                 try {
                     const newHtml = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, args.instruction, selectedModel);
                     setMeetingMinutesHtml(newHtml);
-                    return "Meeting minutes updated successfully.";
-                } catch (e: any) {
-                    return `Error updating minutes: ${e.message}`;
-                }
-            default:
-                return "Unknown action.";
+                    return "Updated.";
+                } catch (e: any) { return `Error: ${e.message}`; }
+            default: return "Unknown action.";
         }
     };
 
-    const appContext = JSON.stringify({
-        hasTranscription: !!finalTranscription,
-        transcriptionPreview: finalTranscription.slice(0, 200),
-        hasMinutes: !!meetingMinutesHtml,
-        topic: lastMeetingDetails?.topic,
-        filesInQueue: fileQueue.length,
-        savedSessionsCount: savedSessions.length
-    });
+    const appContext = JSON.stringify({ hasTranscription: !!finalTranscription, topic: lastMeetingDetails?.topic, filesInQueue: fileQueue.length });
 
     return (
         <div key={refreshKey} className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white font-sans selection:bg-cyan-500 selection:text-white">
@@ -580,9 +489,20 @@ const App: React.FC = () => {
                         <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-2 rounded-lg shadow-lg shadow-cyan-500/20">
                             <RefreshIcon className="w-6 h-6 text-white" />
                         </div>
-                        <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-                            Gemini Meeting Assistant
-                        </h1>
+                        <div>
+                             <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent leading-tight">
+                                Gemini Meeting Assistant
+                            </h1>
+                            {/* API Status Badge */}
+                            {apiStatus && (isLoading || isDiarizing || isGeneratingMinutes || isEditingMinutes) && (
+                                <div className="flex items-center gap-2 mt-0.5 animate-pulse">
+                                    <SparklesIcon className={`w-3 h-3 ${apiStatus.isFallback ? 'text-yellow-400' : 'text-green-400'}`} />
+                                    <span className={`text-[10px] font-mono tracking-wide ${apiStatus.isFallback ? 'text-yellow-300' : 'text-gray-400'}`}>
+                                        Running Key #{apiStatus.keyIndex + 1} | {apiStatus.model} {apiStatus.isFallback ? '(Fallback)' : ''}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
                     </div>
                     <div className="flex items-center gap-4">
                          <a href="https://github.com/google/generative-ai-js" target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white transition-colors">
@@ -593,21 +513,8 @@ const App: React.FC = () => {
                 
                 {/* Navigation Tabs */}
                 <div className="max-w-7xl mx-auto px-4 flex space-x-6 overflow-x-auto">
-                    {[
-                        { id: 'file', label: 'File Upload' },
-                        { id: 'live', label: 'Live Recording' },
-                        { id: 'history', label: 'History' },
-                        { id: 'cloud', label: 'Cloud Storage' },
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id as any)}
-                            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                                activeTab === tab.id 
-                                ? 'border-cyan-500 text-cyan-400' 
-                                : 'border-transparent text-gray-400 hover:text-gray-200'
-                            }`}
-                        >
+                    {[{ id: 'file', label: 'File Upload' }, { id: 'live', label: 'Live Recording' }, { id: 'history', label: 'History' }, { id: 'cloud', label: 'Cloud Storage' }].map(tab => (
+                        <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>
                             {tab.label}
                         </button>
                     ))}
@@ -615,7 +522,6 @@ const App: React.FC = () => {
             </header>
 
             <main className="max-w-7xl mx-auto px-4 py-8 space-y-8">
-                {/* Error Banner */}
                 {error && (
                     <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded-lg flex justify-between items-center animate-shake">
                         <span>{error}</span>
@@ -623,53 +529,27 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* Tab Content */}
                 <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl shadow-xl border border-gray-700 p-6 min-h-[500px]">
                     {activeTab === 'file' && (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative">
                             <div className="lg:col-span-2 space-y-6">
                                 <FileUpload onFileSelect={handleFileSelect} disabled={isLoading} />
-                                <FileQueueList 
-                                    queue={fileQueue} 
-                                    onToggleSelect={handleToggleQueueItem} 
-                                    onRemove={handleRemoveQueueItem} 
-                                    disabled={isLoading} 
-                                />
-                                {fileQueue.some(q => q.status === 'completed') && (
-                                     <TranscriptionMerger queue={fileQueue} onMerge={handleMergeTranscription} />
-                                )}
+                                <FileQueueList queue={fileQueue} onToggleSelect={handleToggleQueueItem} onRemove={handleRemoveQueueItem} disabled={isLoading} />
+                                {fileQueue.some(q => q.status === 'completed') && <TranscriptionMerger queue={fileQueue} onMerge={handleMergeTranscription} />}
                             </div>
-                            
-                            {/* Unified Right Sidebar Control Panel - Sticky on Desktop */}
                             <div className="lg:col-span-1">
                                 <div className="space-y-4 lg:sticky lg:top-8 bg-gray-900/50 p-4 rounded-xl border border-gray-700/50 shadow-inner">
-                                    <h3 className="text-gray-400 font-bold text-xs uppercase tracking-wider border-b border-gray-700 pb-2">
-                                        Cấu hình & Xử lý
-                                    </h3>
-                                    
+                                    <h3 className="text-gray-400 font-bold text-xs uppercase tracking-wider border-b border-gray-700 pb-2">Cấu hình & Xử lý</h3>
                                     <ModelSelector onModelChange={setSelectedModel} disabled={isLoading} initialModel={selectedModel} />
-                                    
-                                    <Options 
-                                        disabled={isLoading} 
-                                        options={processingOptions} 
-                                        onOptionChange={setProcessingOptions} 
-                                    />
-                                    
+                                    <Options disabled={isLoading} options={processingOptions} onOptionChange={setProcessingOptions} />
                                     <div className="pt-2">
-                                        <button
-                                            onClick={handleProcessQueue}
-                                            disabled={isLoading || fileQueue.every(i => !i.isSelected || i.status === 'completed')}
-                                            className="w-full py-3.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg shadow-blue-900/30 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:transform-none"
-                                        >
+                                        <button onClick={handleProcessQueue} disabled={isLoading || fileQueue.every(i => !i.isSelected || i.status === 'completed')} className="w-full py-3.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg shadow-blue-900/30 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
                                             {isLoading ? 'Processing...' : 'Start Processing Selected Files'}
                                         </button>
-                                        
                                         {isLoading && (
                                             <div className="mt-4 space-y-3 p-3 bg-gray-800 rounded-lg border border-gray-700">
                                                 <ProgressBar progress={progress} message={statusMessage} />
-                                                <button onClick={handleCancel} className="text-red-400 text-xs hover:text-red-300 w-full text-center font-medium">
-                                                    Cancel Operation
-                                                </button>
+                                                <button onClick={handleCancel} className="text-red-400 text-xs hover:text-red-300 w-full text-center font-medium">Cancel Operation</button>
                                             </div>
                                         )}
                                     </div>
@@ -677,71 +557,31 @@ const App: React.FC = () => {
                             </div>
                         </div>
                     )}
-
                     {activeTab === 'live' && (
                         <div className="max-w-2xl mx-auto text-center space-y-6">
                             <h2 className="text-2xl font-bold text-white">Real-time Transcription</h2>
-                            <p className="text-gray-400">Use your microphone to transcribe meetings in real-time. Make sure to grant browser permissions.</p>
                             <LiveTranscription onComplete={handleLiveTranscriptionComplete} disabled={isLoading} />
                         </div>
                     )}
-
-                    {activeTab === 'history' && (
-                        <SavedSessionsList 
-                            sessions={savedSessions} 
-                            onLoad={handleLoadSession} 
-                            onDelete={handleDeleteSession} 
-                            onArchive={handleArchiveSession}
-                            onPreview={handlePreviewSession}
-                            onImport={handleImportSession}
-                            disabled={isLoading} 
-                        />
-                    )}
-
-                    {activeTab === 'cloud' && (
-                        <CloudStorage 
-                            sessions={archivedSessions} 
-                            onLoad={handleLoadSession} 
-                            onDelete={handleDeleteArchivedSession} 
-                            onPreview={handlePreviewSession}
-                            onImportDatabase={handleImportDatabase}
-                            disabled={isLoading} 
-                        />
-                    )}
+                    {activeTab === 'history' && <SavedSessionsList sessions={savedSessions} onLoad={handleLoadSession} onDelete={handleDeleteSession} onArchive={handleArchiveSession} onPreview={handlePreviewSession} onImport={handleImportSession} disabled={isLoading} />}
+                    {activeTab === 'cloud' && <CloudStorage sessions={archivedSessions} onLoad={handleLoadSession} onDelete={handleDeleteArchivedSession} onPreview={handlePreviewSession} onImportDatabase={handleImportDatabase} disabled={isLoading} />}
                 </div>
 
-                {/* Transcription Result & Diarization */}
                 {finalTranscription && (
                     <div id="transcription-result-area" className="space-y-6 animate-fade-in-up">
                         <div className="flex justify-between items-center">
                             <h2 className="text-xl font-bold text-cyan-400">Transcription Result</h2>
-                            <button onClick={handleSaveCurrentSession} className="text-sm bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition">
-                                Save Session
-                            </button>
+                            <button onClick={handleSaveCurrentSession} className="text-sm bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition">Save Session</button>
                         </div>
-                        
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <div className="lg:col-span-2 space-y-4">
                                 <TranscriptionResult text={finalTranscription} />
-                                <SpeakerNamer 
-                                    transcription={finalTranscription} 
-                                    onUpdateTranscription={handleUpdateTranscription} 
-                                    disabled={isLoading} 
-                                />
+                                <SpeakerNamer transcription={finalTranscription} onUpdateTranscription={handleUpdateTranscription} disabled={isLoading} />
                             </div>
                             <div className="space-y-4">
                                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
-                                    <h3 className="text-md font-bold text-gray-200 mb-2 flex items-center gap-2">
-                                        <UsersIcon className="w-4 h-4" /> AI Speaker ID
-                                    </h3>
-                                    <p className="text-sm text-gray-400 mb-4">
-                                        Automatically identify and label different speakers in the text using AI.
-                                    </p>
-                                    <button
-                                        onClick={handleIdentifySpeakers}
-                                        disabled={isDiarizing || isLoading}
-                                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors disabled:bg-gray-600"
-                                    >
+                                    <h3 className="text-md font-bold text-gray-200 mb-2 flex items-center gap-2"><UsersIcon className="w-4 h-4" /> AI Speaker ID</h3>
+                                    <button onClick={handleIdentifySpeakers} disabled={isDiarizing || isLoading} className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors disabled:bg-gray-600">
                                         {isDiarizing ? 'Identifying...' : 'Identify Speakers'}
                                     </button>
                                     {isDiarizing && <div className="mt-3"><ProgressBar progress={diarizationProgress} message="Analyzing voices..." /></div>}
@@ -752,21 +592,15 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* Meeting Minutes Generation */}
                 {finalTranscription && (
                     <div className="space-y-6 border-t border-gray-700 pt-8 animate-fade-in-up">
                          <h2 className="text-xl font-bold text-purple-400">Meeting Minutes Generation</h2>
                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                             <div>
-                                <MeetingMinutesGenerator 
-                                    onSubmit={handleGenerateMinutes} 
-                                    disabled={isGeneratingMinutes} 
-                                    initialDetails={lastMeetingDetails}
-                                />
+                                <MeetingMinutesGenerator onSubmit={handleGenerateMinutes} disabled={isGeneratingMinutes} initialDetails={lastMeetingDetails} />
                                 {isGeneratingMinutes && <div className="mt-4"><ProgressBar progress={100} message="AI is writing the minutes..." /></div>}
                                 {minutesError && <p className="text-red-400 mt-2">{minutesError}</p>}
                             </div>
-                            
                             {meetingMinutesHtml && (
                                 <div className="space-y-4">
                                     <MeetingMinutesResult htmlContent={meetingMinutesHtml} />
@@ -779,11 +613,7 @@ const App: React.FC = () => {
                     </div>
                 )}
             </main>
-
-            {/* Chat Assistant */}
             <ChatAssistant onExecuteAction={handleChatAction} appContext={appContext} />
-
-            {/* Preview Modal */}
             {previewSession && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
                     <div className="bg-gray-900 w-full max-w-4xl h-[90vh] rounded-2xl border border-gray-700 flex flex-col shadow-2xl overflow-hidden">
@@ -792,11 +622,7 @@ const App: React.FC = () => {
                             <button onClick={() => setPreviewSession(null)} className="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
                         </div>
                         <div className="flex-1 overflow-auto bg-white p-0">
-                            <iframe
-                                srcDoc={previewSession.meetingMinutesHtml}
-                                title="Preview"
-                                className="w-full h-full border-0"
-                            />
+                            <iframe srcDoc={previewSession.meetingMinutesHtml} title="Preview" className="w-full h-full border-0" />
                         </div>
                     </div>
                 </div>
