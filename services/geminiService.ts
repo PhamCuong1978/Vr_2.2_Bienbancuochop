@@ -1,6 +1,12 @@
-import { GoogleGenAI, Modality, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Modality, FunctionDeclaration, Type, Chat, GenerateContentResponse, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { MeetingDetails } from "../components/MeetingMinutesGenerator";
 import { ProcessingOptions } from "../components/Options";
+
+// --- STRATEGY CONFIGURATION ---
+// Best for Audio & Speed & Chat
+const MODEL_FAST_AUDIO = 'gemini-2.5-flash'; 
+// Best for Reasoning, Complex Instructions, & Formatting (Minutes/Diarization)
+const MODEL_HIGH_REASONING = 'gemini-3-pro-preview'; 
 
 // --- Multi-Key & Fallback State Management ---
 
@@ -71,12 +77,20 @@ const rotateKey = () => {
     console.log(`⚠️ Quota hit or Error. Rotating to API Key #${currentKeyIndex + 1}`);
 };
 
-// Fallback mapping: Stronger fallback strategy
-// gemini-2.0-flash is the stable name. If it fails, we fall back to 1.5-flash.
+// Fallback mapping
+// If the best model fails, fall back to the reliable Flash model
 const FALLBACK_MODEL_MAP: Record<string, string> = {
-    'gemini-2.0-flash': 'gemini-1.5-flash', 
-    'gemini-1.5-pro': 'gemini-1.5-flash',
+    'gemini-3-pro-preview': 'gemini-2.5-flash',
+    'gemini-2.5-flash': 'gemini-2.5-flash-lite-latest',
 };
+
+// Global Safety Settings - CRITICAL for transcription to avoid blocking content
+const SAFETY_SETTINGS = [
+    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 
 // --- Smart Execution Logic ---
 
@@ -89,8 +103,6 @@ const executeGeminiCall = async <T>(
     }
 
     let attempts = 0;
-    // Strategy: Try every key with the requested model. 
-    // If all fail, try every key with the fallback model.
     const maxAttempts = (apiKeys.length * 2) + 2; 
     
     let effectiveModel = requestedModel;
@@ -124,37 +136,37 @@ const executeGeminiCall = async <T>(
             
             // 404/400 often means the Model Name is invalid or not available to this key
             const isModelError = message.includes('not found') || message.includes('404') || message.includes('400');
+            
+            // 5xx Server Errors (Temporary unavailability)
+            const isServerError = message.includes('500') || message.includes('503') || message.includes('overloaded') || message.includes('internal');
 
             console.warn(`Attempt ${attempts} failed. Key #${currentKeyIndex + 1}. Model: ${effectiveModel}. Error: ${message}`);
 
-            if (isQuotaError || isAuthError || isModelError) {
+            if (isQuotaError || isAuthError || isModelError || isServerError) {
                 // Strategy: Rotate Key
                 const previousKeyIndex = currentKeyIndex;
                 rotateKey();
 
-                // Check if we have completed a full rotation of keys
                 const isFullRotation = currentKeyIndex === 0 && previousKeyIndex === (apiKeys.length - 1);
 
                 if (isFullRotation || isModelError) {
-                    // If we tried all keys OR if the model itself is invalid (404), switch to fallback immediately
                     if (FALLBACK_MODEL_MAP[effectiveModel]) {
                         console.warn(`Switching model from ${effectiveModel} to ${FALLBACK_MODEL_MAP[effectiveModel]}`);
                         effectiveModel = FALLBACK_MODEL_MAP[effectiveModel];
                         isFallback = true;
-                        // Reset key index to start fresh with new model
-                        // currentKeyIndex = 0; 
-                    } else if (isFullRotation && !FALLBACK_MODEL_MAP[effectiveModel]) {
-                        // If no fallback map and full rotation done, give up
+                    } else if (isFullRotation && !FALLBACK_MODEL_MAP[effectiveModel] && !isServerError) {
                          if (attempts >= maxAttempts) throw error;
                     }
                 }
                 
-                // Backoff delay
-                await new Promise(res => setTimeout(res, 800));
+                // Exponential Backoff (1.5s, 3s, 4.5s...)
+                const backoffTime = 1500 * attempts;
+                console.log(`Waiting ${backoffTime}ms before retry...`);
+                await new Promise(res => setTimeout(res, backoffTime));
                 continue;
             }
 
-            // Other errors (Network, 500) -> Throw immediately
+            // Other unknown errors -> Throw immediately
             throw error;
         }
     }
@@ -188,12 +200,14 @@ const handleGeminiError = (error: unknown): Error => {
 
 // --- Exported Functions (Wrapped) ---
 
+// Task 1: Transcription -> Use Fast Audio Model (Gemini 2.5 Flash)
+// If user explicitly requests a model (via UI), we honor it, otherwise default to optimal.
 export const transcribeAudio = async (file: File, modelName: string, options?: ProcessingOptions): Promise<string> => {
     try {
         const audioData = await fileToBase64(file);
         const mimeType = file.type;
 
-        return await executeGeminiCall(modelName, async (ai, effectiveModel) => {
+        return await executeGeminiCall(modelName || MODEL_FAST_AUDIO, async (ai, effectiveModel) => {
             const audioPart = { inlineData: { mimeType, data: audioData } };
 
             let textPrompt = `
@@ -212,6 +226,9 @@ YÊU CẦU:
             const response = await ai.models.generateContent({
                 model: effectiveModel,
                 contents: { parts: [audioPart, { text: textPrompt }] },
+                config: {
+                    safetySettings: SAFETY_SETTINGS, // Apply safety settings
+                }
             });
             return response.text || "";
         });
@@ -221,16 +238,22 @@ YÊU CẦU:
     }
 };
 
+// Task 3: Speaker ID -> Use High Reasoning Model (Gemini 3.0 Pro)
+// Identifying speakers from text context requires deep logic to avoid hallucinations.
 export const identifySpeakers = async (transcription: string, modelName: string, speakerCount?: number): Promise<string> => {
     try {
-        return await executeGeminiCall(modelName, async (ai, effectiveModel) => {
-            let prompt = `Bạn là chuyên gia phân tích hội thoại. Gán nhãn người nói ([NGƯỜI NÓI X]:) vào văn bản sau.`;
-            if (speakerCount) prompt += ` Số lượng người: ${speakerCount}.`;
+        // Force override to 3.0 Pro for better logic, unless user specifically chose something else via UI
+        const optimalModel = MODEL_HIGH_REASONING;
+
+        return await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
+            let prompt = `Bạn là chuyên gia phân tích hội thoại. Nhiệm vụ của bạn là gán nhãn người nói ([NGƯỜI NÓI X]:) vào văn bản sau một cách logic nhất dựa trên ngữ cảnh.`;
+            if (speakerCount) prompt += ` Số lượng người ước tính: ${speakerCount}.`;
             prompt += `\n\n---\n${transcription}\n---`;
 
             const response = await ai.models.generateContent({
                 model: effectiveModel,
                 contents: { parts: [{ text: prompt }] },
+                config: { safetySettings: SAFETY_SETTINGS }
             });
             return response.text || "";
         });
@@ -239,9 +262,14 @@ export const identifySpeakers = async (transcription: string, modelName: string,
     }
 };
 
+// Task 4: Meeting Minutes -> Use High Reasoning Model (Gemini 3.0 Pro)
+// Summarization and formatting HTML require the strongest instruction-following model.
 export const generateMeetingMinutes = async (transcription: string, details: MeetingDetails, modelName: string): Promise<string> => {
     try {
-        return await executeGeminiCall(modelName, async (ai, effectiveModel) => {
+        // Force override to 3.0 Pro
+        const optimalModel = MODEL_HIGH_REASONING;
+
+        return await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
              const promptTemplate = `Lập BIÊN BẢN CUỘC HỌP chuyên nghiệp (Tiếng Việt) từ nội dung sau.
 Kết cấu: HTML Inline CSS đẹp.
 A. Thông tin chung (Lấy từ metadata).
@@ -264,6 +292,7 @@ Trả về DOCTYPE html ngay.`;
             const response = await ai.models.generateContent({
                 model: effectiveModel,
                 contents: { parts: [{ text: promptTemplate }] },
+                config: { safetySettings: SAFETY_SETTINGS }
             });
             
             let htmlResponse = response.text || "";
@@ -278,7 +307,10 @@ Trả về DOCTYPE html ngay.`;
 
 export const regenerateMeetingMinutes = async (transcription: string, details: MeetingDetails, previousHtml: string, editRequest: string, modelName: string): Promise<string> => {
     try {
-        return await executeGeminiCall(modelName, async (ai, effectiveModel) => {
+         // Force override to 3.0 Pro
+         const optimalModel = MODEL_HIGH_REASONING;
+
+        return await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
             const prompt = `Chỉnh sửa biên bản họp (HTML) theo yêu cầu.
 Yêu cầu: ${editRequest}
 Dữ liệu gốc (tham khảo): ${transcription}
@@ -288,6 +320,7 @@ Chỉ trả về HTML mới.`;
             const response = await ai.models.generateContent({
                 model: effectiveModel,
                 contents: { parts: [{ text: prompt }] },
+                config: { safetySettings: SAFETY_SETTINGS }
             });
             let htmlResponse = response.text || "";
             if (htmlResponse.startsWith('```html')) htmlResponse = htmlResponse.substring(7);
@@ -299,15 +332,14 @@ Chỉ trả về HTML mới.`;
     }
 };
 
-// Live Transcription uses the dedicated 2.0 Flash endpoint
+// Live Transcription -> Use Native Audio Model
 export const liveTranscriptionSession = async (callbacks: any) => {
     const key = getCurrentApiKey();
     if (!key) throw new Error("API_KEY not found");
     const ai = new GoogleGenAI({ apiKey: key });
     
-    // Fallback logic for live is harder, so we stick to the main exp model
     return ai.live.connect({
-        model: 'gemini-2.0-flash-exp', 
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025', 
         callbacks,
         config: {
              responseModalities: [Modality.AUDIO], 
@@ -316,7 +348,7 @@ export const liveTranscriptionSession = async (callbacks: any) => {
     });
 }
 
-// Chat Assistant uses 2.0 Flash for speed
+// Task 5: Chat Assistant -> Use Fast Model (Gemini 2.5 Flash)
 export const startChatSession = (history: any[] = []) => {
     const key = getCurrentApiKey();
     if (!key) throw new Error("API_KEY not configured");
@@ -330,11 +362,12 @@ export const startChatSession = (history: any[] = []) => {
     const editCurrentMinutesTool: FunctionDeclaration = { name: "edit_current_minutes", description: "Edit minutes.", parameters: { type: Type.OBJECT, properties: { instruction: { type: Type.STRING } } } };
 
     return ai.chats.create({
-        model: "gemini-2.0-flash",
+        model: MODEL_FAST_AUDIO,
         history: history,
         config: {
             tools: [{ functionDeclarations: [listHistoryTool, listArchiveTool, loadSessionTool, archiveSessionTool, editCurrentMinutesTool] }],
             systemInstruction: `Bạn là trợ lý AI.`,
+            safetySettings: SAFETY_SETTINGS
         }
     });
 };

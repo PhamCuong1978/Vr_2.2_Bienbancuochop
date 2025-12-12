@@ -103,7 +103,8 @@ const App: React.FC = () => {
     const [refreshKey, setRefreshKey] = useState(0);
     const [activeTab, setActiveTab] = useState<'file' | 'live' | 'history' | 'cloud'>('file');
     const [fileQueue, setFileQueue] = useState<QueueItem[]>([]);
-    const [selectedModel, setSelectedModel] = useState<string>('gemini-2.0-flash');
+    // Default to Gemini 2.5 Flash for audio processing
+    const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash');
     const [finalTranscription, setFinalTranscription] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [progress, setProgress] = useState<number>(0);
@@ -384,7 +385,7 @@ const App: React.FC = () => {
                     setFileQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'completed', transcription: resultText } : q));
 
                     if (i < itemsToProcess.length - 1) {
-                         const delayMs = 5000;
+                         const delayMs = 8000;
                          setStatusMessage(`Waiting ${delayMs/1000}s before next file to respect API quota...`);
                          await new Promise(resolve => setTimeout(resolve, delayMs));
                     }
@@ -422,6 +423,7 @@ const App: React.FC = () => {
         }, 1000);
 
         try {
+            // NOTE: We pass selectedModel but the service now internally upgrades to 3.0 Pro for this task
             const diarizedText = await identifySpeakers(finalTranscription, selectedModel, processingOptions.speakerCount);
             clearInterval(intervalId);
             setDiarizationProgress(100);
@@ -439,6 +441,7 @@ const App: React.FC = () => {
         setMinutesError(null);
         setLastMeetingDetails(details);
         try {
+             // NOTE: Service internally upgrades to 3.0 Pro for this task
              const html = await generateMeetingMinutes(finalTranscription, details, selectedModel);
              setMeetingMinutesHtml(html);
         } catch (e: any) { setMinutesError(e.message); } finally { setIsGeneratingMinutes(false); }
@@ -449,6 +452,7 @@ const App: React.FC = () => {
         setIsEditingMinutes(true);
         setEditError(null);
         try {
+             // NOTE: Service internally upgrades to 3.0 Pro for this task
             const html = await regenerateMeetingMinutes(finalTranscription, lastMeetingDetails, meetingMinutesHtml, request, selectedModel);
             setMeetingMinutesHtml(html);
         } catch (e: any) { setEditError(e.message); } finally { setIsEditingMinutes(false); }

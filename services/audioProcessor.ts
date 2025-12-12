@@ -14,9 +14,6 @@ declare global {
  * @returns A Blob containing the WAV file data.
  */
 const audioBufferToWav = (buffer: AudioBuffer): Blob => {
-    // Force mono for output consistency and size reduction if logic permits, 
-    // but here we follow the buffer's channels. 
-    // Ideally processAudio forces mono before calling this.
     const numOfChan = buffer.numberOfChannels;
     const length = buffer.length * numOfChan * 2 + 44;
     
@@ -104,27 +101,31 @@ export const processAudio = async (file: File, options: ProcessingOptions): Prom
         const needsProcessing = Object.values(options).some(v => v);
         
         // If no processing needed, just return original. 
-        // BUT we must close context first.
         if (!needsProcessing) {
             return file;
         }
 
-        // Step 1: Resample to 16kHz and convert to mono for consistency.
+        // Step 1: Resample to 16kHz and convert to mono.
+        // Protected by try/catch because OfflineAudioContext can also hit resource limits.
         if (options.convertToMono16kHz) {
-            const targetSampleRate = 16000;
-            // Always force render if we want to ensure mono/16khz
-            // OfflineAudioContext does not count towards the AudioContext limit in the same way, but good to be safe.
-            const offlineContext = new OfflineAudioContext(1, originalBuffer.duration * targetSampleRate, targetSampleRate);
-            const source = offlineContext.createBufferSource();
-            source.buffer = originalBuffer;
-            source.connect(offlineContext.destination);
-            source.start(0);
-            processedBuffer = await offlineContext.startRendering();
+            try {
+                const targetSampleRate = 16000;
+                const offlineContext = new OfflineAudioContext(1, originalBuffer.duration * targetSampleRate, targetSampleRate);
+                const source = offlineContext.createBufferSource();
+                source.buffer = originalBuffer;
+                source.connect(offlineContext.destination);
+                source.start(0);
+                processedBuffer = await offlineContext.startRendering();
+            } catch (offlineError) {
+                console.warn("Offline Audio Processing failed, skipping resampling:", offlineError);
+                // Fallback: Continue with original buffer if resampling fails
+                processedBuffer = originalBuffer;
+            }
         }
 
         let channelData = processedBuffer.getChannelData(0);
 
-        // Step 2: Remove Silence
+        // Step 2: Remove Silence (Pure JS processing, safe)
         if (options.removeSilence) {
             const silenceThreshold = 0.01; // -40dBFS
             const minSilenceDuration = 0.3; // 300ms
@@ -194,7 +195,6 @@ export const processAudio = async (file: File, options: ProcessingOptions): Prom
             if (max > 0.001) {
                 const targetPeak = 0.95; // -0.44 dBFS
                 const gainValue = targetPeak / max;
-                // Simple scalar mult is faster than offline context for gain
                 for(let i=0; i<channelData.length; i++) {
                     channelData[i] *= gainValue;
                 }
@@ -210,12 +210,11 @@ export const processAudio = async (file: File, options: ProcessingOptions): Prom
     } catch (error) {
         console.error("Failed to process audio:", error);
         if (error instanceof Error) {
-            throw error; // Re-throw specific errors
+            throw error;
         }
         throw new Error("An unexpected error occurred during audio pre-processing.");
     } finally {
         // IMPORTANT: Close the audio context to free up hardware resources.
-        // This fixes the "max audio contexts" error when processing queues.
         if (audioContext && audioContext.state !== 'closed') {
             await audioContext.close();
         }
