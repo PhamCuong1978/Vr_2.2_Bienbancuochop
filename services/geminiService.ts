@@ -6,8 +6,6 @@ import { ProcessingOptions } from "../components/Options";
 
 let apiKeys: string[] = [];
 let currentKeyIndex = 0;
-// Track fallback state per request logic, but we can also store a global preference if needed.
-// Here we implement a per-execution fallback strategy.
 
 type StatusListener = (status: { keyIndex: number; totalKeys: number; model: string; isFallback: boolean }) => void;
 const listeners: StatusListener[] = [];
@@ -30,26 +28,31 @@ export const subscribeToStatus = (listener: StatusListener) => {
     };
 };
 
-// Initialize Keys from Env
+// Initialize Keys from Env - ROBUST VERCEL SUPPORT
 const initializeKeys = () => {
     let rawKeys = '';
-    // 1. Check standard process.env
-    if (typeof process !== 'undefined' && process.env) {
-        if (process.env.API_KEY) rawKeys = process.env.API_KEY;
-        else if (process.env.VITE_API_KEY) rawKeys = process.env.VITE_API_KEY;
-    }
-    // 2. Check Vite Client-side
+
+    // Priority 1: Vite Environment Variable (Standard for Vercel + Vite)
     // @ts-ignore
-    if (!rawKeys && typeof import.meta !== 'undefined' && import.meta.env) {
-         // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+        // @ts-ignore
         if (import.meta.env.VITE_API_KEY) rawKeys = import.meta.env.VITE_API_KEY;
-         // @ts-ignore
+        // @ts-ignore
         else if (import.meta.env.API_KEY) rawKeys = import.meta.env.API_KEY;
     }
 
+    // Priority 2: Process Env (Fallback for other environments)
+    if (!rawKeys && typeof process !== 'undefined' && process.env) {
+        if (process.env.VITE_API_KEY) rawKeys = process.env.VITE_API_KEY;
+        else if (process.env.API_KEY) rawKeys = process.env.API_KEY;
+    }
+
     if (rawKeys) {
-        // Split by comma, trim whitespace
+        // Split by comma, trim whitespace, remove empty strings
         apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
+        console.log(`[System] Loaded ${apiKeys.length} API Keys.`);
+    } else {
+        console.error("[System] No API Keys found! Please set VITE_API_KEY in Vercel Environment Variables.");
     }
 };
 
@@ -65,13 +68,13 @@ const getCurrentApiKey = (): string | undefined => {
 const rotateKey = () => {
     if (apiKeys.length <= 1) return; // No rotation possible
     currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
-    console.log(`⚠️ Quota hit. Rotating to API Key #${currentKeyIndex + 1}`);
+    console.log(`⚠️ Quota hit or Error. Rotating to API Key #${currentKeyIndex + 1}`);
 };
 
-// Fallback mapping: Defines what to use if the primary model fails/exhausts quota
+// Fallback mapping: Stronger fallback strategy
 const FALLBACK_MODEL_MAP: Record<string, string> = {
-    'gemini-1.5-pro': 'gemini-2.0-flash', // If Pro fails, use 2.0 Flash (very good)
-    'gemini-2.0-flash': 'gemini-1.5-flash', // If 2.0 Flash fails, use 1.5 Flash (cheapest)
+    'gemini-2.0-flash': 'gemini-1.5-flash', // 2.0 -> 1.5 Flash (Safest bet)
+    'gemini-1.5-pro': 'gemini-2.0-flash',   // Pro -> 2.0 Flash (Better speed/cost)
 };
 
 // --- Smart Execution Logic ---
@@ -81,12 +84,13 @@ const executeGeminiCall = async <T>(
     operation: (ai: GoogleGenAI, effectiveModel: string) => Promise<T>
 ): Promise<T> => {
     if (apiKeys.length === 0) {
-        throw new Error("No API Keys found. Please set VITE_API_KEY in Vercel.");
+        throw new Error("Không tìm thấy API Key. Hãy cài đặt biến môi trường VITE_API_KEY trên Vercel.");
     }
 
     let attempts = 0;
-    // Allow trying every key twice (once for Pro, once for Flash fallback)
-    const maxAttempts = apiKeys.length * 2 + 1; 
+    // Strategy: Try every key with the requested model. 
+    // If all fail, try every key with the fallback model.
+    const maxAttempts = (apiKeys.length * 2) + 2; 
     
     let effectiveModel = requestedModel;
     let isFallback = false;
@@ -97,7 +101,7 @@ const executeGeminiCall = async <T>(
             broadcastStatus(effectiveModel, isFallback);
 
             const apiKey = getCurrentApiKey();
-            if (!apiKey) throw new Error("API Key missing during rotation.");
+            if (!apiKey) throw new Error("API Key missing.");
 
             const ai = new GoogleGenAI({ apiKey });
             
@@ -109,48 +113,51 @@ const executeGeminiCall = async <T>(
             const message = error?.message?.toLowerCase() || '';
             const status = error?.status;
             
-            // Check for Quota (429), Auth, or Not Found (404 - usually invalid model name)
+            // Analyze Error Type
             const isQuotaError = message.includes('429') || 
                                  message.includes('quota') || 
                                  message.includes('resource_exhausted') || 
                                  status === 'RESOURCE_EXHAUSTED';
             
             const isAuthError = message.includes('api key not valid') || message.includes('403');
-            const isModelNotFoundError = message.includes('not found') || message.includes('404');
+            
+            // 404/400 often means the Model Name is invalid or not available to this key
+            const isModelError = message.includes('not found') || message.includes('404') || message.includes('400');
 
-            // If it's a critical API error, try to rotate
-            if (isQuotaError || isAuthError || isModelNotFoundError) {
-                console.warn(`Error on Key #${currentKeyIndex + 1} (${effectiveModel}): ${message}.`);
-                
-                // If model not found, immediate fallback without key rotation might be smarter, 
-                // but let's stick to rotation + fallback logic to be safe.
-                
-                // 1. Rotate Key first
+            console.warn(`Attempt ${attempts} failed. Key #${currentKeyIndex + 1}. Model: ${effectiveModel}. Error: ${message}`);
+
+            if (isQuotaError || isAuthError || isModelError) {
+                // Strategy: Rotate Key
                 const previousKeyIndex = currentKeyIndex;
                 rotateKey();
 
-                // 2. If we looped back to the start (tried all keys), switch to Fallback Model
-                if (currentKeyIndex === 0 && previousKeyIndex === apiKeys.length - 1) {
+                // Check if we have completed a full rotation of keys
+                const isFullRotation = currentKeyIndex === 0 && previousKeyIndex === (apiKeys.length - 1);
+
+                if (isFullRotation || isModelError) {
+                    // If we tried all keys OR if the model itself is invalid (404), switch to fallback immediately
                     if (FALLBACK_MODEL_MAP[effectiveModel]) {
-                        console.warn(`All keys exhausted for ${effectiveModel}. Fallback to ${FALLBACK_MODEL_MAP[effectiveModel]}`);
+                        console.warn(`Switching model from ${effectiveModel} to ${FALLBACK_MODEL_MAP[effectiveModel]}`);
                         effectiveModel = FALLBACK_MODEL_MAP[effectiveModel];
                         isFallback = true;
-                    } else {
-                        // No fallback available and all keys failed
-                        if (attempts >= maxAttempts) throw error;
+                        // Reset key index to start fresh with new model
+                        // currentKeyIndex = 0; 
+                    } else if (isFullRotation) {
+                        // If no fallback map and full rotation done, give up
+                         if (attempts >= maxAttempts) throw error;
                     }
                 }
                 
-                // Small delay to prevent rapid-fire loop
-                await new Promise(res => setTimeout(res, 500));
+                // Backoff delay
+                await new Promise(res => setTimeout(res, 800));
                 continue;
             }
 
-            // If it's another error (e.g. 500 server error, payload too large), just throw
+            // Other errors (Network, 500) -> Throw immediately
             throw error;
         }
     }
-    throw new Error("All API keys and fallback models exhausted. Please check your billing or try again later.");
+    throw new Error("Hệ thống đang quá tải hoặc hết Quota trên tất cả các Key. Vui lòng thử lại sau.");
 };
 
 
@@ -297,8 +304,7 @@ export const liveTranscriptionSession = async (callbacks: any) => {
     if (!key) throw new Error("API_KEY not found");
     const ai = new GoogleGenAI({ apiKey: key });
     
-    // NOTE: 'gemini-2.0-flash-exp' is the current valid preview model for Live API
-    // If 'gemini-2.0-flash-exp' is unavailable, try 'gemini-2.0-flash-001'
+    // Fallback logic for live is harder, so we stick to the main exp model
     return ai.live.connect({
         model: 'gemini-2.0-flash-exp', 
         callbacks,
@@ -315,7 +321,7 @@ export const startChatSession = (history: any[] = []) => {
     if (!key) throw new Error("API_KEY not configured");
     const ai = new GoogleGenAI({ apiKey: key });
     
-    // Tools Definition (Simplified)
+    // Tools Definition
     const listHistoryTool: FunctionDeclaration = { name: "list_history", description: "List saved sessions." };
     const listArchiveTool: FunctionDeclaration = { name: "list_archive", description: "List archived sessions." };
     const loadSessionTool: FunctionDeclaration = { name: "load_session", description: "Load session.", parameters: { type: Type.OBJECT, properties: { sessionId: { type: Type.STRING } } } };
