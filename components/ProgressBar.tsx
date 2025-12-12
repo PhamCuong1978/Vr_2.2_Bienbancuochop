@@ -11,7 +11,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ progress, message }) => {
         <div className="space-y-2">
             <div className="flex justify-between items-center">
                 <p className="text-sm text-gray-300">{message}</p>
-                 <p className="text-sm font-semibold text-cyan-400">{progress}%</p>
+                 <p className="text-sm font-semibold text-cyan-400 whitespace-nowrap">{Number(progress).toFixed(2)}%</p>
             </div>
             <div className="w-full bg-gray-700 rounded-full h-2.5">
                 <div
