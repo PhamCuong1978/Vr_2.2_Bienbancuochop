@@ -86,8 +86,12 @@ const audioBufferToWav = (buffer: AudioBuffer): Blob => {
  */
 export const processAudio = async (file: File, options: ProcessingOptions): Promise<File> => {
     let originalBuffer: AudioBuffer;
+    
+    // CRITICAL FIX: Manage AudioContext lifecycle to prevent "Max AudioContexts" error on Vercel/Browsers
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContextClass();
+
     try {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const arrayBuffer = await file.arrayBuffer();
         try {
             originalBuffer = await audioContext.decodeAudioData(arrayBuffer);
@@ -97,18 +101,19 @@ export const processAudio = async (file: File, options: ProcessingOptions): Prom
         
         let processedBuffer = originalBuffer;
         
-        // Force processing if any option is true OR if we need to enforce format for stability
-        // We will default to ensuring 16kHz Mono to fix "F F F" hallucination issues even if no options are checked
-        // unless options are explicitly disabled. But user passed options.
-        // Let's rely on options.convertToMono16kHz for explicit conversion.
-        
         const needsProcessing = Object.values(options).some(v => v);
-        if (!needsProcessing) return file;
+        
+        // If no processing needed, just return original. 
+        // BUT we must close context first.
+        if (!needsProcessing) {
+            return file;
+        }
 
         // Step 1: Resample to 16kHz and convert to mono for consistency.
         if (options.convertToMono16kHz) {
             const targetSampleRate = 16000;
             // Always force render if we want to ensure mono/16khz
+            // OfflineAudioContext does not count towards the AudioContext limit in the same way, but good to be safe.
             const offlineContext = new OfflineAudioContext(1, originalBuffer.duration * targetSampleRate, targetSampleRate);
             const source = offlineContext.createBufferSource();
             source.buffer = originalBuffer;
@@ -158,7 +163,6 @@ export const processAudio = async (file: File, options: ProcessingOptions): Prom
                 soundIntervals.forEach(interval => {
                     const segment = channelData.slice(interval.start, interval.end);
                     // Add padding
-                    // Note: This is simple padding, ideally windowed fade.
                     offset += paddingSamples; 
                     newChannelData.set(segment, offset);
                     offset += segment.length;
@@ -209,5 +213,11 @@ export const processAudio = async (file: File, options: ProcessingOptions): Prom
             throw error; // Re-throw specific errors
         }
         throw new Error("An unexpected error occurred during audio pre-processing.");
+    } finally {
+        // IMPORTANT: Close the audio context to free up hardware resources.
+        // This fixes the "max audio contexts" error when processing queues.
+        if (audioContext && audioContext.state !== 'closed') {
+            await audioContext.close();
+        }
     }
 };

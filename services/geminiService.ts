@@ -72,9 +72,10 @@ const rotateKey = () => {
 };
 
 // Fallback mapping: Stronger fallback strategy
+// gemini-2.0-flash is the stable name. If it fails, we fall back to 1.5-flash.
 const FALLBACK_MODEL_MAP: Record<string, string> = {
-    'gemini-2.0-flash': 'gemini-1.5-flash', // 2.0 -> 1.5 Flash (Safest bet)
-    'gemini-1.5-pro': 'gemini-2.0-flash',   // Pro -> 2.0 Flash (Better speed/cost)
+    'gemini-2.0-flash': 'gemini-1.5-flash', 
+    'gemini-1.5-pro': 'gemini-1.5-flash',
 };
 
 // --- Smart Execution Logic ---
@@ -142,7 +143,7 @@ const executeGeminiCall = async <T>(
                         isFallback = true;
                         // Reset key index to start fresh with new model
                         // currentKeyIndex = 0; 
-                    } else if (isFullRotation) {
+                    } else if (isFullRotation && !FALLBACK_MODEL_MAP[effectiveModel]) {
                         // If no fallback map and full rotation done, give up
                          if (attempts >= maxAttempts) throw error;
                     }
