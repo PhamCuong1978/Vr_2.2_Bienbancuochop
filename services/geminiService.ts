@@ -6,15 +6,17 @@ import { ProcessingOptions } from "../components/Options";
 
 let apiKeys: string[] = [];
 let currentKeyIndex = 0;
-let currentActiveModel = ''; // Track which model is actually being used
-type StatusListener = (status: { keyIndex: number; model: string; isFallback: boolean }) => void;
+// Track fallback state per request logic, but we can also store a global preference if needed.
+// Here we implement a per-execution fallback strategy.
+
+type StatusListener = (status: { keyIndex: number; totalKeys: number; model: string; isFallback: boolean }) => void;
 const listeners: StatusListener[] = [];
 
 // Helper to broadcast status changes to UI
 const broadcastStatus = (model: string, isFallback: boolean) => {
-    currentActiveModel = model;
     listeners.forEach(l => l({ 
         keyIndex: currentKeyIndex, 
+        totalKeys: apiKeys.length,
         model: model, 
         isFallback 
     }));
@@ -22,15 +24,13 @@ const broadcastStatus = (model: string, isFallback: boolean) => {
 
 export const subscribeToStatus = (listener: StatusListener) => {
     listeners.push(listener);
-    // Send immediate update
-    listener({ keyIndex: currentKeyIndex, model: currentActiveModel, isFallback: false });
     return () => {
         const idx = listeners.indexOf(listener);
         if (idx > -1) listeners.splice(idx, 1);
     };
 };
 
-// Initialize Keys
+// Initialize Keys from Env
 const initializeKeys = () => {
     let rawKeys = '';
     // 1. Check standard process.env
@@ -48,7 +48,7 @@ const initializeKeys = () => {
     }
 
     if (rawKeys) {
-        // Split by comma and trim whitespace
+        // Split by comma, trim whitespace
         apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
     }
 };
@@ -63,8 +63,9 @@ const getCurrentApiKey = (): string | undefined => {
 };
 
 const rotateKey = () => {
+    if (apiKeys.length <= 1) return; // No rotation possible
     currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
-    console.log(`Switched to API Key #${currentKeyIndex + 1}`);
+    console.log(`⚠️ Quota hit. Rotating to API Key #${currentKeyIndex + 1}`);
 };
 
 // Fallback mapping
@@ -80,33 +81,36 @@ const executeGeminiCall = async <T>(
     requestedModel: string,
     operation: (ai: GoogleGenAI, effectiveModel: string) => Promise<T>
 ): Promise<T> => {
-    const startKeyIndex = currentKeyIndex;
+    if (apiKeys.length === 0) {
+        throw new Error("No API Keys found. Please set VITE_API_KEY in Vercel.");
+    }
+
     let attempts = 0;
-    const maxAttempts = apiKeys.length * 2; // Allow full rotation for primary model, then full rotation for fallback
+    // Allow trying every key twice (once for Pro, once for Flash fallback)
+    const maxAttempts = apiKeys.length * 2 + 1; 
     
     let effectiveModel = requestedModel;
     let isFallback = false;
 
-    // Helper to get client
-    const getClient = () => {
-        const key = getCurrentApiKey();
-        if (!key) throw new Error("API_KEY not found. Please check your .env or Vercel settings.");
-        return new GoogleGenAI({ apiKey: key });
-    };
-
     while (attempts < maxAttempts) {
         try {
-            // Notify UI of current attempt state
+            // Notify UI
             broadcastStatus(effectiveModel, isFallback);
 
-            const ai = getClient();
+            const apiKey = getCurrentApiKey();
+            if (!apiKey) throw new Error("API Key missing during rotation.");
+
+            const ai = new GoogleGenAI({ apiKey });
+            
+            // Execute the actual API call
             return await operation(ai, effectiveModel);
 
         } catch (error: any) {
+            attempts++;
             const message = error?.message?.toLowerCase() || '';
             const status = error?.status;
             
-            // Check for Quota/Rate Limit (429) or Authentication errors
+            // Check for Quota (429) or Auth errors
             const isQuotaError = message.includes('429') || 
                                  message.includes('quota') || 
                                  message.includes('resource_exhausted') || 
@@ -114,40 +118,36 @@ const executeGeminiCall = async <T>(
             
             const isAuthError = message.includes('api key not valid') || message.includes('403');
 
+            // If it's a critical API error, try to rotate
             if (isQuotaError || isAuthError) {
-                console.warn(`Error with Key #${currentKeyIndex + 1} (${effectiveModel}): ${message}. Rotating key...`);
+                console.warn(`Error on Key #${currentKeyIndex + 1} (${effectiveModel}): ${message}.`);
+                
+                // 1. Rotate Key first
+                const previousKeyIndex = currentKeyIndex;
                 rotateKey();
-                attempts++;
 
-                // If we have tried all keys for the current model
-                // (Checking if we looped back to start index, roughly)
-                const completedFullRotation = attempts % apiKeys.length === 0;
-
-                if (completedFullRotation) {
-                    // Check if we can fallback
+                // 2. If we looped back to the start (tried all keys), switch to Fallback Model
+                if (currentKeyIndex === 0 && previousKeyIndex === apiKeys.length - 1) {
                     if (FALLBACK_MODEL_MAP[effectiveModel]) {
-                        console.warn(`All keys exhausted for ${effectiveModel}. Falling back to ${FALLBACK_MODEL_MAP[effectiveModel]}`);
+                        console.warn(`All keys exhausted for ${effectiveModel}. Fallback to ${FALLBACK_MODEL_MAP[effectiveModel]}`);
                         effectiveModel = FALLBACK_MODEL_MAP[effectiveModel];
                         isFallback = true;
-                        // Continue loop with new model and next key
                     } else {
-                        // No fallback available or already on Flash, and all keys failed
+                        // No fallback available and all keys failed
                         if (attempts >= maxAttempts) throw error;
                     }
                 }
                 
-                // Small delay before retry to prevent tight loop hammering
+                // Small delay to prevent rapid-fire loop
                 await new Promise(res => setTimeout(res, 500));
                 continue;
             }
 
-            // If it's another error (e.g. 500 server error, payload too large), typical retry logic or throw
-            // Here we re-use the generic error handler logic but inside this smart wrapper we just throw
-            // and let the caller handle format.
+            // If it's another error (e.g. 500 server error, payload too large), just throw
             throw error;
         }
     }
-    throw new Error("All API keys and fallback models exhausted.");
+    throw new Error("All API keys and fallback models exhausted. Please check your billing or try again later.");
 };
 
 
@@ -172,13 +172,10 @@ const handleGeminiError = (error: unknown): Error => {
         try { message = (error as any).message || JSON.stringify(error); } catch { message = String(error); }
     } else message = String(error);
     
-    const lowerMessage = message.toLowerCase();
-    if (lowerMessage.includes('quota') || lowerMessage.includes('429')) return new Error("All API keys exhausted their quota. Please check billing.");
-    
     return new Error(message);
 };
 
-// --- Exported Functions (Wrapped with Smart Execution) ---
+// --- Exported Functions (Wrapped) ---
 
 export const transcribeAudio = async (file: File, modelName: string, options?: ProcessingOptions): Promise<string> => {
     try {

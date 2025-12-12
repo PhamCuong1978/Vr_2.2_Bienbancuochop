@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { transcribeAudio, generateMeetingMinutes, regenerateMeetingMinutes, identifySpeakers, subscribeToStatus } from './services/geminiService';
+import { transcribeAudio, generateMeetingMinutes, regenerateMeetingMinutes, identifySpeakers, subscribeToStatus, getApiKey } from './services/geminiService';
 import { processAudio } from './services/audioProcessor';
 import FileUpload from './components/FileUpload';
 import Options, { ProcessingOptions } from './components/Options';
@@ -111,7 +111,7 @@ const App: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     // --- Status State ---
-    const [apiStatus, setApiStatus] = useState<{ keyIndex: number; model: string; isFallback: boolean } | null>(null);
+    const [apiStatus, setApiStatus] = useState<{ keyIndex: number; totalKeys: number; model: string; isFallback: boolean } | null>(null);
 
     const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>({
         convertToMono16kHz: true,
@@ -155,6 +155,12 @@ const App: React.FC = () => {
         const unsubscribe = subscribeToStatus((status) => {
             setApiStatus(status);
         });
+        
+        // Initial check for key
+        if (!getApiKey()) {
+            setError("Warning: No API Key found. If deploying on Vercel, please set VITE_API_KEY in Environment Variables.");
+        }
+
         return () => unsubscribe();
     }, []);
 
@@ -489,18 +495,20 @@ const App: React.FC = () => {
                         <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-2 rounded-lg shadow-lg shadow-cyan-500/20">
                             <RefreshIcon className="w-6 h-6 text-white" />
                         </div>
-                        <div>
+                        <div className="flex flex-col">
                              <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent leading-tight">
                                 Gemini Meeting Assistant
                             </h1>
-                            {/* API Status Badge */}
-                            {apiStatus && (isLoading || isDiarizing || isGeneratingMinutes || isEditingMinutes) && (
-                                <div className="flex items-center gap-2 mt-0.5 animate-pulse">
+                            {/* API Status Badge - Visible when API is detected */}
+                            {apiStatus ? (
+                                <div className="flex items-center gap-2 mt-0.5">
                                     <SparklesIcon className={`w-3 h-3 ${apiStatus.isFallback ? 'text-yellow-400' : 'text-green-400'}`} />
                                     <span className={`text-[10px] font-mono tracking-wide ${apiStatus.isFallback ? 'text-yellow-300' : 'text-gray-400'}`}>
-                                        Running Key #{apiStatus.keyIndex + 1} | {apiStatus.model} {apiStatus.isFallback ? '(Fallback)' : ''}
+                                        Key {apiStatus.keyIndex + 1}/{apiStatus.totalKeys} | {apiStatus.model} {apiStatus.isFallback ? '(Fallback)' : ''}
                                     </span>
                                 </div>
+                            ) : (
+                                <span className="text-[10px] text-gray-500 mt-0.5">Initializing API...</span>
                             )}
                         </div>
                     </div>
