@@ -18,6 +18,7 @@ import FileQueueList, { QueueItem } from './components/FileQueueList';
 import TranscriptionMerger from './components/TranscriptionMerger';
 import CloudStorage from './components/CloudStorage';
 import ChatAssistant from './components/ChatAssistant';
+import { APP_VERSION } from './Version';
 
 // Helper function to extract the topic from the generated HTML
 const extractTopicFromHtml = (htmlContent: string): string | null => {
@@ -125,6 +126,7 @@ const App: React.FC = () => {
 
     const [meetingMinutesHtml, setMeetingMinutesHtml] = useState<string>('');
     const [isGeneratingMinutes, setIsGeneratingMinutes] = useState<boolean>(false);
+    const [minutesProgress, setMinutesProgress] = useState<number>(0); // New state for Minutes Progress
     const [minutesError, setMinutesError] = useState<string | null>(null);
     const [lastMeetingDetails, setLastMeetingDetails] = useState<MeetingDetails | null>(null);
     
@@ -386,8 +388,11 @@ const App: React.FC = () => {
                     setFileQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'completed', transcription: resultText } : q));
 
                     if (i < itemsToProcess.length - 1) {
-                         const delayMs = 8000;
-                         setStatusMessage(`Waiting ${delayMs/1000}s before next file to respect API quota...`);
+                         // MULTI-KEY OPTIMIZATION:
+                         // We rely on key rotation to handle 429s, so we can be aggressive here.
+                         // Just a small 2s delay to be polite, not 15s.
+                         const delayMs = 2000;
+                         setStatusMessage(`Taking a quick breath (${delayMs/1000}s)...`);
                          await new Promise(resolve => setTimeout(resolve, delayMs));
                     }
                 } catch (itemError: any) {
@@ -442,12 +447,41 @@ const App: React.FC = () => {
     const handleGenerateMinutes = async (details: MeetingDetails) => {
         setIsGeneratingMinutes(true);
         setMinutesError(null);
+        setMinutesProgress(0); // Reset progress
         setLastMeetingDetails(details);
+        
+        // --- Simulated Progress Bar Logic ---
+        // Simulates realistic "thinking" time for the AI (starts fast, slows down at 90%)
+        const intervalId = setInterval(() => {
+            setMinutesProgress((prev) => {
+                // If it reaches 95% and still waiting, just hold there
+                if (prev >= 95) return prev;
+                
+                // Calculate increment based on remaining distance to 95
+                // As it gets closer, it moves slower (Zeno's paradox style)
+                const remaining = 95 - prev;
+                const increment = Math.max(0.5, remaining * 0.05); 
+                return Math.min(95, prev + increment);
+            });
+        }, 500); // Update every 500ms
+
         try {
              // NOTE: Service internally upgrades to 3.0 Pro for this task
              const html = await generateMeetingMinutes(finalTranscription, details, selectedModel);
+             
+             clearInterval(intervalId);
+             setMinutesProgress(100); // Jump to 100% immediately upon success
+             
+             // Tiny delay so user sees 100% before the bar disappears/results appear
+             await new Promise(r => setTimeout(r, 400));
+             
              setMeetingMinutesHtml(html);
-        } catch (e: any) { setMinutesError(e.message); } finally { setIsGeneratingMinutes(false); }
+        } catch (e: any) { 
+            clearInterval(intervalId);
+            setMinutesError(e.message); 
+        } finally { 
+            setIsGeneratingMinutes(false); 
+        }
     };
 
     const handleEditMinutes = async (request: string) => {
@@ -503,9 +537,14 @@ const App: React.FC = () => {
                             <RefreshIcon className="w-6 h-6 text-white" />
                         </div>
                         <div className="flex flex-col">
-                             <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent leading-tight">
-                                Gemini Meeting Assistant
-                            </h1>
+                             <div className="flex items-baseline gap-2">
+                                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent leading-tight">
+                                    Gemini Meeting Assistant
+                                </h1>
+                                <span className="text-[10px] font-thin text-gray-400 border border-gray-700/50 rounded-sm px-1.5 py-0.5 tracking-wider select-none">
+                                    Ver {APP_VERSION}
+                                </span>
+                             </div>
                             {/* API Status Badge - Visible when API is detected */}
                             {apiStatus ? (
                                 <div className="flex items-center gap-2 mt-0.5">
@@ -602,7 +641,7 @@ const App: React.FC = () => {
                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                             <div>
                                 <MeetingMinutesGenerator onSubmit={handleGenerateMinutes} disabled={isGeneratingMinutes} initialDetails={lastMeetingDetails} />
-                                {isGeneratingMinutes && <div className="mt-4"><ProgressBar progress={100} message="AI is writing the minutes..." /></div>}
+                                {isGeneratingMinutes && <div className="mt-4"><ProgressBar progress={minutesProgress} message="AI đang suy luận & viết biên bản..." /></div>}
                                 {minutesError && <p className="text-red-400 mt-2">{minutesError}</p>}
                             </div>
                             {meetingMinutesHtml && (

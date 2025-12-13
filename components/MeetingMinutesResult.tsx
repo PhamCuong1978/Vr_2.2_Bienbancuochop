@@ -9,14 +9,18 @@ interface MeetingMinutesResultProps {
 
 const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent, className }) => {
     
-    const getHtmlBlob = () => new Blob([htmlContent], { type: 'text/html' });
+    const getHtmlBlob = () => new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
 
     const handleDownload = () => {
         const blob = getHtmlBlob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'meeting-minutes.html';
+        
+        // Generate filename with current date: Bien_ban_hop_DD-MM-YYYY.html
+        const dateStr = new Date().toLocaleDateString('vi-VN').replace(/\//g, '-');
+        a.download = `Bien_ban_hop_${dateStr}.html`;
+        
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

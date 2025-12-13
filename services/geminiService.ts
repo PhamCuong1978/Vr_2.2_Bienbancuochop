@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality, FunctionDeclaration, Type, Chat, GenerateContentResponse, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { MeetingDetails } from "../components/MeetingMinutesGenerator";
 import { ProcessingOptions } from "../components/Options";
@@ -159,8 +160,11 @@ const executeGeminiCall = async <T>(
                     }
                 }
                 
-                // Exponential Backoff (1.5s, 3s, 4.5s...)
-                const backoffTime = 1500 * attempts;
+                // Exponential Backoff logic - NOW FASTER because we have multiple keys
+                // If we rotated keys, try almost immediately (200ms). If single key, wait longer.
+                const baseBackoff = apiKeys.length > 1 ? 200 : 2000;
+                const backoffTime = baseBackoff * (isQuotaError ? 1 : attempts);
+                
                 console.log(`Waiting ${backoffTime}ms before retry...`);
                 await new Promise(res => setTimeout(res, backoffTime));
                 continue;
@@ -196,6 +200,109 @@ const handleGeminiError = (error: unknown): Error => {
     } else message = String(error);
     
     return new Error(message);
+};
+
+/**
+ * Wraps raw HTML content in a complete HTML5 document structure with UTF-8 encoding.
+ * This ensures that Vietnamese characters are displayed correctly in all browsers.
+ * Updated to include Professional Table CSS for Section V.
+ */
+const wrapHtmlContent = (bodyContent: string): string => {
+    return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Biên Bản Cuộc Họp</title>
+    <style>
+        body {
+            font-family: 'Times New Roman', Times, serif;
+            background-color: #f3f4f6;
+            margin: 0;
+            padding: 40px 20px;
+            color: #1f2937;
+            line-height: 1.6;
+        }
+        .page-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            padding: 40px 50px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-radius: 4px;
+            min-height: 297mm; /* Approximate A4 height */
+        }
+        .header-title {
+            color: #003366; /* Navy Blue */
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+        .section-header {
+            color: #003366;
+            text-transform: uppercase;
+            font-weight: bold;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #003366;
+            display: inline-block;
+            padding-bottom: 2px;
+        }
+        ul, ol {
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+        li {
+            margin-bottom: 5px;
+        }
+        /* SECTION V: ASSIGNMENT TABLE STYLES */
+        table.assignment-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            margin-bottom: 25px;
+            font-size: 14px;
+        }
+        table.assignment-table th {
+            background-color: #0070c0; /* Blue header from image */
+            color: white;
+            font-weight: bold;
+            padding: 12px 8px;
+            border: 1px solid #8ba3c2;
+            text-align: center;
+            vertical-align: middle;
+        }
+        table.assignment-table td {
+            padding: 10px 8px;
+            border: 1px solid #8ba3c2;
+            vertical-align: top;
+            text-align: left;
+            color: #333;
+        }
+        table.assignment-table tr:nth-child(even) {
+            background-color: #f2f7fc; /* Light blue stripe */
+        }
+        
+        @media print {
+            body { 
+                background: none; 
+                padding: 0; 
+            }
+            .page-container { 
+                box-shadow: none; 
+                margin: 0; 
+                width: 100%;
+                max-width: 100%;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-container">
+        ${bodyContent}
+    </div>
+</body>
+</html>`;
 };
 
 // --- Exported Functions (Wrapped) ---
@@ -269,25 +376,86 @@ export const generateMeetingMinutes = async (transcription: string, details: Mee
         // Force override to 3.0 Pro
         const optimalModel = MODEL_HIGH_REASONING;
 
-        return await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
-             const promptTemplate = `Lập BIÊN BẢN CUỘC HỌP chuyên nghiệp (Tiếng Việt) từ nội dung sau.
-Kết cấu: HTML Inline CSS đẹp.
-A. Thông tin chung (Lấy từ metadata).
-B. Thảo luận chi tiết (Quan trọng nhất).
-C. Kết luận & Chỉ đạo.
-D. Phân công.
+        const bodyContent = await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
+             const promptTemplate = `Bạn là Thư ký cuộc họp chuyên nghiệp. Hãy soạn thảo BIÊN BẢN CUỘC HỌP từ nội dung bên dưới.
+Sử dụng định dạng HTML (chỉ phần body content) để trình bày CHUẨN VĂN BẢN HÀNH CHÍNH VIỆT NAM.
 
-Metadata:
-- Thời gian/Địa điểm: ${details.timeAndPlace}
-- Chủ trì: ${details.chair}
-- Thành phần: ${details.attendees}
-- Chủ đề: ${details.topic}
-- Kết thúc: ${details.endTime}
+QUY TẮC CỐT LÕI (TUÂN THỦ TUYỆT ĐỐI):
+1. **KHÔNG TRẢ LỜI LỜI NÓI**. Chỉ trả về duy nhất mã HTML.
+2. Nội dung phải cực kỳ chi tiết, không tóm tắt chung chung.
+3. KHÔNG cần thẻ <html>, <head>, <body> hay <!DOCTYPE>. Chỉ cần nội dung bên trong thẻ body.
 
-Transcript:
+CẤU TRÚC BẮT BUỘC (MỚI: CÓ THÊM BẢNG PHÂN CÔNG):
+
+<div>
+    <!-- HEADER -->
+    <div style="text-align: center; margin-bottom: 30px;">
+        <h4 style="margin: 0; font-weight: bold; text-transform: uppercase;">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</h4>
+        <h5 style="margin: 5px 0 0 0; font-weight: bold; text-decoration: underline;">Độc lập - Tự do - Hạnh phúc</h5>
+        <p style="margin-top: 15px; text-align: right; font-style: italic;">${details.timeAndPlace.split(',')[0] || '.......'}, ngày... tháng... năm...</p>
+        <br/>
+        <h2 class="header-title" style="margin: 15px 0; font-size: 20pt; color: #003366;">BIÊN BẢN CUỘC HỌP</h2>
+        <h3 style="margin: 0; font-weight: bold; font-size: 14pt;">V/v: ${details.topic}</h3>
+    </div>
+
+    <!-- BODY -->
+    <p class="section-header">I. THỜI GIAN VÀ ĐỊA ĐIỂM:</p>
+    <p style="margin-left: 20px;">- Thời gian: ${details.timeAndPlace}</p>
+    <p style="margin-left: 20px;">- Địa điểm: ${details.timeAndPlace}</p>
+
+    <p class="section-header">II. THÀNH PHẦN THAM DỰ:</p>
+    <p style="margin-left: 20px;">1. Chủ trì: ${details.chair}</p>
+    <p style="margin-left: 20px;">2. Thư ký: (Đang cập nhật)</p>
+    <p style="margin-left: 20px;">3. Thành phần: ${details.attendees}</p>
+
+    <p class="section-header">III. NỘI DUNG CUỘC HỌP (CHI TIẾT):</p>
+    <div style="margin-left: 20px; text-align: justify;">
+        <!-- YÊU CẦU: Phân tích sâu transcript, trích dẫn số liệu, lập luận. -->
+    </div>
+
+    <p class="section-header">IV. KẾT LUẬN & CHỈ ĐẠO:</p>
+    <div style="margin-left: 20px; text-align: justify;">
+        - Tóm tắt kết luận của chủ tọa.
+    </div>
+
+    <!-- SECTION V: WORK ASSIGNMENT TABLE -->
+    <p class="section-header">V. PHÂN CÔNG THỰC HIỆN CÔNG VIỆC:</p>
+    <table class="assignment-table">
+        <thead>
+            <tr>
+                <th style="width: 5%">STT</th>
+                <th style="width: 35%">Nội dung công việc</th>
+                <th style="width: 20%">Người/Bộ phận<br/>chịu trách nhiệm</th>
+                <th style="width: 15%">Thời hạn<br/>hoàn thành</th>
+                <th style="width: 25%">Ghi chú</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- AI ĐIỀN CÁC DÒNG (TR) VÀO ĐÂY DỰA TRÊN TRANSCRIPT -->
+            <!-- NẾU KHÔNG CÓ PHÂN CÔNG, GHI: <tr><td colspan="5" style="text-align:center">Không có phân công cụ thể</td></tr> -->
+        </tbody>
+    </table>
+
+    <p class="section-header">VI. CUỘC HỌP KẾT THÚC VÀO LÚC: ${details.endTime}</p>
+
+    <!-- SIGNATURE -->
+    <div style="display: flex; justify-content: space-between; margin-top: 60px;">
+        <div style="text-align: center; width: 45%;">
+            <strong>THƯ KÝ</strong><br/>
+            (Ký, ghi rõ họ tên)<br/><br/><br/><br/>
+        </div>
+        <div style="text-align: center; width: 45%;">
+            <strong>CHỦ TRÌ CUỘC HỌP</strong><br/>
+            (Ký, ghi rõ họ tên)<br/><br/><br/><br/>
+            <strong>${details.chair}</strong>
+        </div>
+    </div>
+</div>
+
+TRANSCRIPT HỘI THOẠI ĐỂ XỬ LÝ:
 ${transcription}
 
-Trả về DOCTYPE html ngay.`;
+HÃY ĐIỀN NỘI DUNG CHI TIẾT VÀO CÁC MỤC. ĐẶC BIỆT LÀ BẢNG PHÂN CÔNG Ở MỤC V, HÃY TRÍCH XUẤT CÁC NHIỆM VỤ, DEADLINE, NGƯỜI PHỤ TRÁCH TỪ HỘI THOẠI ĐỂ ĐIỀN VÀO BẢNG.`;
 
             const response = await ai.models.generateContent({
                 model: effectiveModel,
@@ -296,10 +464,16 @@ Trả về DOCTYPE html ngay.`;
             });
             
             let htmlResponse = response.text || "";
-            if (htmlResponse.startsWith('```html')) htmlResponse = htmlResponse.substring(7);
-            if (htmlResponse.endsWith('```')) htmlResponse = htmlResponse.slice(0, -3);
+            // Cleanup markdown code blocks
+            if (htmlResponse.includes("```html")) htmlResponse = htmlResponse.split("```html")[1];
+            if (htmlResponse.includes("```")) htmlResponse = htmlResponse.split("```")[0];
+
             return htmlResponse.trim();
         });
+
+        // Wrap the body content with the full HTML structure + UTF-8 meta tag
+        return wrapHtmlContent(bodyContent);
+
     } catch (error) {
         throw handleGeminiError(error);
     }
@@ -310,12 +484,23 @@ export const regenerateMeetingMinutes = async (transcription: string, details: M
          // Force override to 3.0 Pro
          const optimalModel = MODEL_HIGH_REASONING;
 
-        return await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
-            const prompt = `Chỉnh sửa biên bản họp (HTML) theo yêu cầu.
-Yêu cầu: ${editRequest}
-Dữ liệu gốc (tham khảo): ${transcription}
-HTML cũ: ${previousHtml}
-Chỉ trả về HTML mới.`;
+        const bodyContent = await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
+            const prompt = `Bạn là một phần mềm xử lý văn bản tự động.
+NHIỆM VỤ: Chỉnh sửa nội dung biên bản họp dựa trên yêu cầu người dùng.
+YÊU CẦU CỐT LÕI:
+1. **CHỈ TRẢ VỀ DUY NHẤT MÃ HTML** (Nội dung bên trong thẻ body).
+2. Giữ nguyên cấu trúc các thẻ <h2 class="header-title">, <p class="section-header"> và đặc biệt là bảng <table class="assignment-table">.
+3. Nếu người dùng yêu cầu thêm nhiệm vụ, hãy cập nhật vào bảng ở Mục V.
+
+Yêu cầu chỉnh sửa cụ thể: "${editRequest}"
+
+Transcript gốc:
+${transcription}
+
+HTML cũ (Tham khảo):
+${previousHtml}
+
+OUTPUT (HTML BODY CONTENT ONLY):`;
             
             const response = await ai.models.generateContent({
                 model: effectiveModel,
@@ -323,10 +508,22 @@ Chỉ trả về HTML mới.`;
                 config: { safetySettings: SAFETY_SETTINGS }
             });
             let htmlResponse = response.text || "";
-            if (htmlResponse.startsWith('```html')) htmlResponse = htmlResponse.substring(7);
-            if (htmlResponse.endsWith('```')) htmlResponse = htmlResponse.slice(0, -3);
+            
+            if (htmlResponse.includes("```html")) htmlResponse = htmlResponse.split("```html")[1];
+            if (htmlResponse.includes("```")) htmlResponse = htmlResponse.split("```")[0];
+            
+            if (htmlResponse.includes("<body")) {
+                const match = htmlResponse.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+                if (match && match[1]) {
+                    htmlResponse = match[1];
+                }
+            }
+
             return htmlResponse.trim();
         });
+
+        return wrapHtmlContent(bodyContent);
+
     } catch (error) {
         throw handleGeminiError(error);
     }

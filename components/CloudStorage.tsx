@@ -16,12 +16,14 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
     const dbInputRef = useRef<HTMLInputElement>(null);
 
     const handleDownloadHtml = (session: SavedSession) => {
-        const blob = new Blob([session.meetingMinutesHtml], { type: 'text/html' });
+        const blob = new Blob([session.meetingMinutesHtml], { type: 'text/html;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const safeName = (session.name || 'bien-ban-hop').replace(/[/\\?%*:|"<>]/g, '-');
-        a.download = `${safeName}.html`;
+        // Use safe filename with date
+        const dateStr = new Date(session.createdAt).toLocaleDateString('vi-VN').replace(/\//g, '-');
+        const safeName = (session.name || 'bien-ban-hop').replace(/[/\\?%*:|"<>]/g, '-').substring(0, 30);
+        a.download = `Bien_ban_${safeName}_${dateStr}.html`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
