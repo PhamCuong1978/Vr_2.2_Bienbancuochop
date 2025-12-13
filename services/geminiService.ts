@@ -205,7 +205,7 @@ const handleGeminiError = (error: unknown): Error => {
 /**
  * Wraps raw HTML content in a complete HTML5 document structure with UTF-8 encoding.
  * This ensures that Vietnamese characters are displayed correctly in all browsers.
- * Updated to include Professional Table CSS for Section V.
+ * Updated to include Professional Table CSS for Section V and Structured Boxes for Section III.
  */
 const wrapHtmlContent = (bodyContent: string): string => {
     return `<!DOCTYPE html>
@@ -263,7 +263,7 @@ const wrapHtmlContent = (bodyContent: string): string => {
             font-size: 14px;
         }
         table.assignment-table th {
-            background-color: #0070c0; /* Blue header from image */
+            background-color: #0070c0; /* Blue header */
             color: white;
             font-weight: bold;
             padding: 12px 8px;
@@ -279,9 +279,45 @@ const wrapHtmlContent = (bodyContent: string): string => {
             color: #333;
         }
         table.assignment-table tr:nth-child(even) {
-            background-color: #f2f7fc; /* Light blue stripe */
+            background-color: #f2f7fc;
         }
         
+        /* SECTION III: STRUCTURED DISCUSSION STYLES */
+        .discussion-block {
+            margin-bottom: 25px;
+            border-left: 4px solid #003366;
+            padding-left: 15px;
+        }
+        .discussion-title {
+            font-weight: bold;
+            font-size: 16px;
+            color: #1a202c;
+            margin-bottom: 10px;
+            text-decoration: underline;
+        }
+        .detail-box {
+            margin-bottom: 15px;
+            border: 1px solid #e5e7eb;
+            padding: 12px;
+            background-color: #fff;
+            border-radius: 4px;
+        }
+        .detail-header {
+            font-weight: bold;
+            color: #b91c1c; /* Dark Red as requested in image style */
+            border: 1px solid #b91c1c;
+            display: inline-block;
+            padding: 2px 8px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            font-size: 12px;
+            background-color: #fff;
+        }
+        .detail-content {
+            text-align: justify;
+            margin-left: 5px;
+        }
+
         @media print {
             body { 
                 background: none; 
@@ -308,7 +344,6 @@ const wrapHtmlContent = (bodyContent: string): string => {
 // --- Exported Functions (Wrapped) ---
 
 // Task 1: Transcription -> Use Fast Audio Model (Gemini 2.5 Flash)
-// If user explicitly requests a model (via UI), we honor it, otherwise default to optimal.
 export const transcribeAudio = async (file: File, modelName: string, options?: ProcessingOptions): Promise<string> => {
     try {
         const audioData = await fileToBase64(file);
@@ -346,10 +381,8 @@ YÊU CẦU:
 };
 
 // Task 3: Speaker ID -> Use High Reasoning Model (Gemini 3.0 Pro)
-// Identifying speakers from text context requires deep logic to avoid hallucinations.
 export const identifySpeakers = async (transcription: string, modelName: string, speakerCount?: number): Promise<string> => {
     try {
-        // Force override to 3.0 Pro for better logic, unless user specifically chose something else via UI
         const optimalModel = MODEL_HIGH_REASONING;
 
         return await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
@@ -370,22 +403,25 @@ export const identifySpeakers = async (transcription: string, modelName: string,
 };
 
 // Task 4: Meeting Minutes -> Use High Reasoning Model (Gemini 3.0 Pro)
-// Summarization and formatting HTML require the strongest instruction-following model.
+// Updated Prompt for 90% detail, 3-part structured discussion AND Minimum 5 items for IV & V
 export const generateMeetingMinutes = async (transcription: string, details: MeetingDetails, modelName: string): Promise<string> => {
     try {
-        // Force override to 3.0 Pro
         const optimalModel = MODEL_HIGH_REASONING;
 
         const bodyContent = await executeGeminiCall(optimalModel, async (ai, effectiveModel) => {
-             const promptTemplate = `Bạn là Thư ký cuộc họp chuyên nghiệp. Hãy soạn thảo BIÊN BẢN CUỘC HỌP từ nội dung bên dưới.
-Sử dụng định dạng HTML (chỉ phần body content) để trình bày CHUẨN VĂN BẢN HÀNH CHÍNH VIỆT NAM.
+             const promptTemplate = `Bạn là Thư ký cuộc họp chuyên nghiệp. Hãy soạn thảo BIÊN BẢN CUỘC HỌP.
+Sử dụng định dạng HTML (chỉ phần body content).
 
 QUY TẮC CỐT LÕI (TUÂN THỦ TUYỆT ĐỐI):
-1. **KHÔNG TRẢ LỜI LỜI NÓI**. Chỉ trả về duy nhất mã HTML.
-2. Nội dung phải cực kỳ chi tiết, không tóm tắt chung chung.
-3. KHÔNG cần thẻ <html>, <head>, <body> hay <!DOCTYPE>. Chỉ cần nội dung bên trong thẻ body.
+1. **MỤC III (NỘI DUNG CUỘC HỌP) PHẢI CỰC KỲ CHI TIẾT (90%)**. Không tóm tắt sơ sài. Phải trích dẫn các con số, luận điểm phản biện, ý kiến trái chiều.
+2. **CẤU TRÚC MỤC III**: Với MỖI vấn đề chính, phải tạo một khối riêng gồm 3 phần: Bối cảnh, Diễn biến, Kết luận.
+3. **SỐ LƯỢNG MỤC IV & V (BẮT BUỘC)**:
+   - **Mục IV (Kết luận)**: Phải liệt kê **TỐI THIỂU 5 Ý CHÍNH**.
+   - **Mục V (Bảng phân công)**: Phải điền **TỐI THIỂU 5 DÒNG NHIỆM VỤ**. Nếu không đủ thông tin, hãy suy luận logic từ các chỉ đạo để điền đủ.
+   - **QUY TẮC SỐ LẺ**: Ưu tiên tổng số lượng mục/dòng là **5, 7, hoặc 9**. Tránh để số lượng chẵn (6, 8) nếu có thể để bố cục đẹp hơn.
+4. KHÔNG cần thẻ <html>, <head>, <body> hay <!DOCTYPE>. Chỉ cần nội dung bên trong thẻ body.
 
-CẤU TRÚC BẮT BUỘC (MỚI: CÓ THÊM BẢNG PHÂN CÔNG):
+CẤU TRÚC HTML MẪU:
 
 <div>
     <!-- HEADER -->
@@ -405,20 +441,57 @@ CẤU TRÚC BẮT BUỘC (MỚI: CÓ THÊM BẢNG PHÂN CÔNG):
 
     <p class="section-header">II. THÀNH PHẦN THAM DỰ:</p>
     <p style="margin-left: 20px;">1. Chủ trì: ${details.chair}</p>
-    <p style="margin-left: 20px;">2. Thư ký: (Đang cập nhật)</p>
+    <p style="margin-left: 20px;">2. Thư ký: AI của Anh Cường</p>
     <p style="margin-left: 20px;">3. Thành phần: ${details.attendees}</p>
 
     <p class="section-header">III. NỘI DUNG CUỘC HỌP (CHI TIẾT):</p>
+    
+    <!-- AI LẶP LẠI CẤU TRÚC SAU CHO MỖI VẤN ĐỀ THẢO LUẬN -->
+    <!-- VẤN ĐỀ 1 -->
+    <div class="discussion-block">
+        <div class="discussion-title">1. [Tên vấn đề thảo luận]</div>
+        
+        <div class="detail-box">
+            <span class="detail-header">Bối cảnh & Thông tin đầu vào:</span>
+            <div class="detail-content">
+                [Mô tả chi tiết: Ai trình bày? Dữ liệu ban đầu là gì? Vấn đề phát sinh?]
+            </div>
+        </div>
+
+        <div class="detail-box">
+            <span class="detail-header">Diễn biến thảo luận:</span>
+            <div class="detail-content">
+                <p><strong>Luồng ý kiến:</strong></p>
+                <ul>
+                    <li>[Người A] ý kiến: ... (Trích dẫn chi tiết)</li>
+                    <li>[Người B] phản biện: ... (Ghi rõ lý do phản biện)</li>
+                    <li>[Người C] bổ sung: ... </li>
+                </ul>
+                <p><em>(Giữ lại 90% chi tiết các tranh luận, con số, lập luận từ transcript)</em></p>
+            </div>
+        </div>
+
+        <div class="detail-box">
+            <span class="detail-header">Kết luận/Chốt vấn đề:</span>
+            <div class="detail-content">
+                [Ghi rõ quyết định cuối cùng của chủ tọa hoặc sự thống nhất của cuộc họp]
+            </div>
+        </div>
+    </div>
+    <!-- HẾT VẤN ĐỀ 1 -->
+
+    <p class="section-header">IV. KẾT LUẬN CHUNG & CHỈ ĐẠO:</p>
     <div style="margin-left: 20px; text-align: justify;">
-        <!-- YÊU CẦU: Phân tích sâu transcript, trích dẫn số liệu, lập luận. -->
+        <!-- LIỆT KÊ TỐI THIỂU 5 Ý GẠCH ĐẦU DÒNG. NẾU ĐƯỢC HÃY LẤY 7 HOẶC 9 Ý. TRÁNH SỐ CHẴN. -->
+        <ul>
+            <li>...</li>
+            <li>...</li>
+            <li>...</li>
+            <li>...</li>
+            <li>...</li>
+        </ul>
     </div>
 
-    <p class="section-header">IV. KẾT LUẬN & CHỈ ĐẠO:</p>
-    <div style="margin-left: 20px; text-align: justify;">
-        - Tóm tắt kết luận của chủ tọa.
-    </div>
-
-    <!-- SECTION V: WORK ASSIGNMENT TABLE -->
     <p class="section-header">V. PHÂN CÔNG THỰC HIỆN CÔNG VIỆC:</p>
     <table class="assignment-table">
         <thead>
@@ -431,8 +504,7 @@ CẤU TRÚC BẮT BUỘC (MỚI: CÓ THÊM BẢNG PHÂN CÔNG):
             </tr>
         </thead>
         <tbody>
-            <!-- AI ĐIỀN CÁC DÒNG (TR) VÀO ĐÂY DỰA TRÊN TRANSCRIPT -->
-            <!-- NẾU KHÔNG CÓ PHÂN CÔNG, GHI: <tr><td colspan="5" style="text-align:center">Không có phân công cụ thể</td></tr> -->
+            <!-- AI ĐIỀN TỐI THIỂU 5 DÒNG (TR). ƯU TIÊN 7 HOẶC 9 DÒNG. TRÁNH SỐ CHẴN. -->
         </tbody>
     </table>
 
@@ -443,6 +515,7 @@ CẤU TRÚC BẮT BUỘC (MỚI: CÓ THÊM BẢNG PHÂN CÔNG):
         <div style="text-align: center; width: 45%;">
             <strong>THƯ KÝ</strong><br/>
             (Ký, ghi rõ họ tên)<br/><br/><br/><br/>
+            <strong>AI của Anh Cường</strong>
         </div>
         <div style="text-align: center; width: 45%;">
             <strong>CHỦ TRÌ CUỘC HỌP</strong><br/>
@@ -455,7 +528,10 @@ CẤU TRÚC BẮT BUỘC (MỚI: CÓ THÊM BẢNG PHÂN CÔNG):
 TRANSCRIPT HỘI THOẠI ĐỂ XỬ LÝ:
 ${transcription}
 
-HÃY ĐIỀN NỘI DUNG CHI TIẾT VÀO CÁC MỤC. ĐẶC BIỆT LÀ BẢNG PHÂN CÔNG Ở MỤC V, HÃY TRÍCH XUẤT CÁC NHIỆM VỤ, DEADLINE, NGƯỜI PHỤ TRÁCH TỪ HỘI THOẠI ĐỂ ĐIỀN VÀO BẢNG.`;
+HÃY ĐIỀN NỘI DUNG. 
+LƯU Ý QUAN TRỌNG: 
+- MỤC III: CHI TIẾT 90%. 
+- MỤC IV & V: TỐI THIỂU 5 MỤC/DÒNG. ƯU TIÊN SỐ LẺ (5, 7, 9) ĐỂ ĐẸP MẮT.`;
 
             const response = await ai.models.generateContent({
                 model: effectiveModel,
@@ -489,8 +565,8 @@ export const regenerateMeetingMinutes = async (transcription: string, details: M
 NHIỆM VỤ: Chỉnh sửa nội dung biên bản họp dựa trên yêu cầu người dùng.
 YÊU CẦU CỐT LÕI:
 1. **CHỈ TRẢ VỀ DUY NHẤT MÃ HTML** (Nội dung bên trong thẻ body).
-2. Giữ nguyên cấu trúc các thẻ <h2 class="header-title">, <p class="section-header"> và đặc biệt là bảng <table class="assignment-table">.
-3. Nếu người dùng yêu cầu thêm nhiệm vụ, hãy cập nhật vào bảng ở Mục V.
+2. Giữ nguyên cấu trúc các thẻ và class CSS.
+3. **ĐẢM BẢO SỐ LƯỢNG**: Nếu người dùng yêu cầu liên quan đến Mục IV hoặc V, hãy đảm bảo luôn duy trì **tối thiểu 5 mục/dòng**. Ưu tiên số lẻ (5, 7, 9).
 
 Yêu cầu chỉnh sửa cụ thể: "${editRequest}"
 
