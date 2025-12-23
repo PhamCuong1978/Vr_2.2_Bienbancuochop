@@ -57,6 +57,7 @@ const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent
         setIsSaving(true);
         try {
             const fileName = getFileName();
+            // Hàm này bây giờ đã có Timeout 15s bên trong
             const cloudUrl = await saveReportToCloud(fileName, htmlContent);
             if (cloudUrl) {
                 console.log("Biên bản đã được lưu tại:", cloudUrl);
@@ -64,6 +65,7 @@ const MeetingMinutesResult: React.FC<MeetingMinutesResultProps> = ({ htmlContent
         } catch (error) {
             console.error("Lỗi khi lưu Cloud:", error);
         } finally {
+            // Đảm bảo nút được mở lại kể cả khi lỗi
             setIsSaving(false);
         }
     };
