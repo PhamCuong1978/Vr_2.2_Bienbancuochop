@@ -1,5 +1,5 @@
 
-import { put } from '@vercel/blob';
+import { put, list, del } from '@vercel/blob';
 
 /**
  * Hàm lấy Token từ biến môi trường một cách an toàn.
@@ -11,7 +11,6 @@ const getBlobToken = () => {
   // @ts-ignore
   const proc = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-  // Ưu tiên các biến có tiền tố VITE_ vì chúng được Vite hỗ trợ chính thức
   return env.VITE_BLOB_READ_WRITE_TOKEN || 
          proc.VITE_BLOB_READ_WRITE_TOKEN || 
          env.BLOB_READ_WRITE_TOKEN || 
@@ -20,17 +19,13 @@ const getBlobToken = () => {
 
 /**
  * Hàm lưu nội dung HTML vào Vercel Blob
- * @param fileName Tên file
- * @param htmlContent Nội dung HTML
  */
 export const saveReportToCloud = async (fileName: string, htmlContent: string) => {
   try {
     const token = getBlobToken();
-    
     if (!token) {
-      const errorMsg = "THIẾU TOKEN: Anh Cường hãy vào Vercel Settings -> Environment Variables, thêm một biến mới tên là VITE_BLOB_READ_WRITE_TOKEN với giá trị lấy từ biến gốc, sau đó REDEPLOY lại ứng dụng nhé!";
-      alert(errorMsg);
-      throw new Error(errorMsg);
+      alert("THIẾU TOKEN: Anh Cường hãy thêm VITE_BLOB_READ_WRITE_TOKEN vào Vercel Settings.");
+      return null;
     }
 
     const blob = await put(`bien-ban/${fileName}.html`, htmlContent, {
@@ -43,9 +38,43 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
     return blob.url;
   } catch (error: any) {
     console.error("Lỗi khi lưu vào Vercel Blob:", error);
-    // Không alert thêm nếu đã alert ở trên
-    if (!error.message.includes("THIẾU TOKEN")) {
-        alert(`Lỗi hệ thống: ${error.message || "Không thể kết nối Vercel Storage."}`);
-    }
+    alert(`Lỗi hệ thống: ${error.message}`);
+    return null;
+  }
+};
+
+/**
+ * Hàm lấy danh sách các tệp tin đã lưu trên Vercel Blob
+ */
+export const listCloudReports = async () => {
+  try {
+    const token = getBlobToken();
+    if (!token) return [];
+
+    const { blobs } = await list({
+      prefix: 'bien-ban/',
+      token: token,
+    });
+    
+    return blobs;
+  } catch (error) {
+    console.error("Lỗi khi lấy danh sách tệp Cloud:", error);
+    return [];
+  }
+};
+
+/**
+ * Hàm xóa tệp tin trên Vercel Blob
+ */
+export const deleteCloudReport = async (url: string) => {
+  try {
+    const token = getBlobToken();
+    if (!token) return;
+
+    await del(url, { token: token });
+    alert("✅ Đã xóa tệp trên Cloud thành công!");
+  } catch (error) {
+    console.error("Lỗi khi xóa tệp Cloud:", error);
+    alert("Không thể xóa tệp trên Cloud.");
   }
 };
