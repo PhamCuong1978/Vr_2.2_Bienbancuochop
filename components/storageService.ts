@@ -1,9 +1,11 @@
 
-/**
- * Dịch vụ Lưu trữ Tối giản cho Anh Cường (Bản 2.4.4)
- * Chỉ tập trung vào việc đẩy file HTML lên Cloud.
- */
+import { put } from '@vercel/blob';
 
+const CLOUD_INDEX_KEY = 'gemini_cloud_index_v1';
+
+/**
+ * Hàm lấy Token từ biến môi trường
+ */
 const getBlobToken = () => {
   // @ts-ignore
   const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : {};
@@ -17,69 +19,77 @@ const getBlobToken = () => {
 };
 
 /**
- * Tải trực tiếp file HTML lên Vercel Blob
+ * Hàm lưu vết tệp tin vào bộ nhớ trình duyệt (Local Index)
  */
-export const saveReportToCloud = async (fileName: string, htmlContent: string): Promise<string | null> => {
-    const token = getBlobToken();
-    if (!token) {
-        alert("Thiếu Token Vercel để lưu trữ Cloud!");
-        return null;
-    }
-
+const addToCloudIndex = (name: string, url: string) => {
     try {
-        const timestamp = Date.now();
-        const safeName = fileName.replace(/[/\\?%*:|"<>]/g, '-');
-        const pathname = `bien-ban/${safeName}_${timestamp}.html`;
-        
-        // Endpoint PUT trực tiếp để tránh lỗi CORS phức tạp của SDK
-        const url = `https://blob.vercel-storage.com/${pathname}`;
-
-        const response = await fetch(url, {
-            method: 'PUT',
-            body: htmlContent,
-            headers: {
-                'authorization': `Bearer ${token}`,
-                'x-api-version': '7',
-                'content-type': 'text/html'
-            }
-        });
-
-        if (!response.ok) {
-            const err = await response.text();
-            throw new Error(`Vercel rejected: ${err}`);
-        }
-
-        const result = await response.json();
-        return result.url; // Trả về link trực tiếp
-    } catch (error: any) {
-        console.error("Lỗi lưu Cloud:", error);
-        alert(`Không thể lưu Cloud: ${error.message}`);
-        return null;
+        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
+        const index = raw ? JSON.parse(raw) : [];
+        const newItem = {
+            pathname: `bien-ban/${name}.html`,
+            url: url,
+            uploadedAt: new Date().toISOString()
+        };
+        // Thêm vào đầu danh sách
+        localStorage.setItem(CLOUD_INDEX_KEY, JSON.stringify([newItem, ...index]));
+    } catch (e) {
+        console.error("Không thể cập nhật Cloud Index:", e);
     }
 };
 
 /**
- * Xóa file trên Cloud bằng URL (nếu cần)
+ * Hàm lưu nội dung HTML vào Vercel Blob
  */
-export const deleteCloudFile = async (url: string) => {
+export const saveReportToCloud = async (fileName: string, htmlContent: string) => {
+  try {
     const token = getBlobToken();
-    if (!token) return;
+    if (!token) {
+      alert("THIẾU TOKEN: Anh Cường hãy kiểm tra lại cấu hình VITE_BLOB_READ_WRITE_TOKEN.");
+      return null;
+    }
 
+    // Upload tệp lên Vercel
+    const blob = await put(`bien-ban/${fileName}.html`, htmlContent, {
+      access: 'public',
+      contentType: 'text/html',
+      token: token,
+    });
+    
+    // Lưu vết vào Local Index để hiển thị trong tab Cloud Storage
+    addToCloudIndex(fileName, blob.url);
+    
+    alert("✅ Đã lưu lên Cloud thành công!");
+    return blob.url;
+  } catch (error: any) {
+    console.error("Lỗi khi lưu vào Vercel Blob:", error);
+    alert(`Lỗi hệ thống: ${error.message}`);
+    return null;
+  }
+};
+
+/**
+ * Hàm lấy danh sách tệp từ Local Index (Vì API List bị Vercel chặn CORS trên Client)
+ */
+export const listCloudReports = async () => {
     try {
-        await fetch(`https://blob.vercel-storage.com/delete`, {
-            method: 'POST',
-            headers: {
-                'authorization': `Bearer ${token}`,
-                'content-type': 'application/json',
-                'x-api-version': '7'
-            },
-            body: JSON.stringify({ urls: [url] })
-        });
+        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
+        return raw ? JSON.parse(raw) : [];
     } catch (e) {
-        console.error("Xóa file Cloud thất bại:", e);
+        return [];
     }
 };
 
-// Các hàm cũ được giữ lại empty để tránh lỗi import ở các file khác nếu có
-export const listCloudReports = async () => [];
-export const deleteCloudReport = async (url: string) => {};
+/**
+ * Hàm xóa vết tệp tin trong Local Index
+ */
+export const deleteCloudReport = async (url: string) => {
+    try {
+        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
+        if (!raw) return;
+        const index = JSON.parse(raw);
+        const newIndex = index.filter((item: any) => item.url !== url);
+        localStorage.setItem(CLOUD_INDEX_KEY, JSON.stringify(newIndex));
+    } catch (e) {
+        console.error("Lỗi khi xóa vết Cloud Index:", e);
+    }
+};
