@@ -15,4 +15,4 @@
  * -> 2.3.0 ... -> 2.9.9 
  * -> 3.0.0
  */
-export const APP_VERSION = '2.2.9';
+export const APP_VERSION = '2.3.1';
