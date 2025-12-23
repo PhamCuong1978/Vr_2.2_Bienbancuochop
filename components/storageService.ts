@@ -1,11 +1,14 @@
 
-import { put, del } from '@vercel/blob';
+/**
+ * Dịch vụ Lưu trữ Chuyên sâu cho Anh Cường
+ * Không dùng SDK để tránh lỗi Header của Vercel
+ */
 
-const REGISTRY_PATH = 'bien-ban/registry.json';
-const STORE_URL_CACHE_KEY = 'vercel_blob_store_url';
+const REGISTRY_PATH = 'bien-ban/registry_v3.json';
+const STORE_BASE_URL_KEY = 'gemini_store_base_url_v3';
 
 /**
- * Hàm lấy Token từ biến môi trường
+ * Lấy Token bảo mật
  */
 const getBlobToken = () => {
   // @ts-ignore
@@ -19,9 +22,6 @@ const getBlobToken = () => {
          proc.BLOB_READ_WRITE_TOKEN;
 };
 
-/**
- * Cấu trúc tệp tin trên Cloud
- */
 interface CloudFileItem {
     pathname: string;
     url: string;
@@ -29,142 +29,121 @@ interface CloudFileItem {
 }
 
 /**
- * Kỹ thuật Discovery: Tìm Base URL của Store
+ * Lệnh PUT thuần túy (Thay thế cho SDK)
+ * Bypasses CORS header restrictions
  */
-const getStoreBaseUrl = async (token: string): Promise<string | null> => {
-    // 1. Thử lấy từ cache
-    const cached = localStorage.getItem(STORE_URL_CACHE_KEY);
-    if (cached) return cached;
+const rawPut = async (pathname: string, content: string, contentType: string): Promise<any> => {
+    const token = getBlobToken();
+    if (!token) throw new Error("Thanh niên Cường ơi, thiếu Token rồi!");
 
+    // Endpoint chuẩn của Vercel Blob API
+    const url = `https://blob.vercel-storage.com/${pathname}`;
+
+    const response = await fetch(url, {
+        method: 'PUT',
+        body: content,
+        headers: {
+            'authorization': `Bearer ${token}`,
+            'x-api-version': '7',
+            'content-type': contentType,
+            // KHÔNG thêm bất kỳ Header tùy biến nào khác để tránh lỗi CORS Preflight
+        }
+    });
+
+    if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Vercel Từ Chối: ${err}`);
+    }
+
+    const result = await response.json();
+    // Lưu lại Base URL để dùng cho các lần sau (Listing)
+    if (result.url) {
+        const baseUrl = result.url.split(`/${pathname}`)[0];
+        localStorage.setItem(STORE_BASE_URL_KEY, baseUrl);
+    }
+    return result;
+};
+
+/**
+ * Hàm lấy danh sách tệp tin
+ */
+export const listCloudReports = async (): Promise<CloudFileItem[]> => {
     try {
-        // 2. Nếu không có, thực hiện một lệnh put nhỏ để lấy URL
-        const blob = await put('system/discovery.txt', 'discovery', {
-            access: 'public',
-            token: token,
-            addRandomSuffix: false
-        });
-        
-        // URL có dạng: https://[store-id].public.blob.vercel-storage.com/system/discovery.txt
-        const baseUrl = blob.url.split('/system/')[0];
-        localStorage.setItem(STORE_URL_CACHE_KEY, baseUrl);
-        return baseUrl;
+        const baseUrl = localStorage.getItem(STORE_BASE_URL_KEY);
+        if (!baseUrl) return [];
+
+        // Lấy Sổ cái Registry qua lệnh GET (Cực nhanh, không bao giờ lỗi CORS)
+        const response = await fetch(`${baseUrl}/${REGISTRY_PATH}?t=${Date.now()}`);
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
     } catch (e) {
-        console.error("Discovery failed:", e);
+        return [];
+    }
+};
+
+/**
+ * Hàm lưu biên bản (Cơ chế Registry mới)
+ */
+export const saveReportToCloud = async (fileName: string, htmlContent: string) => {
+    try {
+        const token = getBlobToken();
+        if (!token) {
+            alert("Anh Cường kiểm tra lại Token nhé!");
+            return null;
+        }
+
+        // 1. Lưu file HTML chính
+        const timestamp = Date.now();
+        const pathname = `bien-ban/${fileName}_${timestamp}.html`;
+        const blob = await rawPut(pathname, htmlContent, 'text/html');
+
+        // 2. Cập nhật Sổ cái Registry
+        const currentList = await listCloudReports();
+        const newItem: CloudFileItem = {
+            pathname: pathname,
+            url: blob.url,
+            uploadedAt: new Date().toISOString()
+        };
+        
+        const updatedList = [newItem, ...currentList].slice(0, 100); // Giữ tối đa 100 biên bản gần nhất
+        
+        await rawPut(REGISTRY_PATH, JSON.stringify(updatedList), 'application/json');
+
+        alert("✅ Tuyệt vời anh Cường! Lưu Cloud XONG.");
+        return blob.url;
+    } catch (error: any) {
+        console.error("Lỗi chuyên sâu:", error);
+        alert(`Hệ thống báo lỗi: ${error.message}`);
         return null;
     }
 };
 
 /**
- * Hàm LẤY danh sách từ Sổ cái Registry (Vượt lỗi CORS)
- */
-export const listCloudReports = async (): Promise<CloudFileItem[]> => {
-    try {
-        const token = getBlobToken();
-        if (!token) return [];
-
-        const baseUrl = await getStoreBaseUrl(token);
-        if (!baseUrl) return [];
-
-        // Đọc trực tiếp tệp registry.json bằng fetch (GET có CORS tốt)
-        // Thêm tham số t để tránh cache trình duyệt
-        const response = await fetch(`${baseUrl}/${REGISTRY_PATH}?t=${Date.now()}`);
-        
-        if (response.status === 404) return [];
-        if (!response.ok) throw new Error("Registry Error");
-
-        const data = await response.json();
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        console.warn("Lấy danh sách từ Cloud thất bại, dùng Local Index làm backup.");
-        const local = localStorage.getItem('gemini_cloud_index_v1');
-        return local ? JSON.parse(local) : [];
-    }
-};
-
-/**
- * Hàm CẬP NHẬT Sổ cái Registry
- */
-const updateRegistry = async (token: string, newItem: CloudFileItem) => {
-    try {
-        const currentList = await listCloudReports();
-        // Lọc trùng và đưa item mới lên đầu
-        const filtered = currentList.filter(item => item.pathname !== newItem.pathname);
-        const updated = [newItem, ...filtered];
-
-        // Ghi đè tệp registry.json
-        await put(REGISTRY_PATH, JSON.stringify(updated, null, 2), {
-            access: 'public',
-            contentType: 'application/json',
-            token: token,
-            addRandomSuffix: false // CỐ ĐỊNH URL ĐỂ FETCH
-        });
-        
-        localStorage.setItem('gemini_cloud_index_v1', JSON.stringify(updated));
-    } catch (e) {
-        console.error("Update registry failed:", e);
-    }
-};
-
-/**
- * Hàm lưu nội dung HTML vào Vercel Blob
- */
-export const saveReportToCloud = async (fileName: string, htmlContent: string) => {
-  const token = getBlobToken();
-  if (!token) {
-    alert("THIẾU TOKEN: Anh Cường hãy kiểm tra lại cấu hình VITE_BLOB_READ_WRITE_TOKEN.");
-    return null;
-  }
-
-  try {
-    // 1. Upload tệp HTML
-    const pathname = `bien-ban/${fileName}.html`;
-    const blob = await put(pathname, htmlContent, {
-      access: 'public',
-      contentType: 'text/html',
-      token: token,
-      addRandomSuffix: true
-    });
-    
-    // 2. Cập nhật Registry
-    await updateRegistry(token, {
-        pathname: pathname,
-        url: blob.url,
-        uploadedAt: new Date().toISOString()
-    });
-    
-    alert("✅ Đã lưu lên Cloud và đồng bộ thành công!");
-    return blob.url;
-  } catch (error: any) {
-    console.error("Lỗi khi lưu vào Vercel Blob:", error);
-    alert(`Lỗi: ${error.message}`);
-    return null;
-  }
-};
-
-/**
- * Hàm xóa tệp tin (Xóa trong Registry và Cloud)
+ * Hàm xóa tệp
  */
 export const deleteCloudReport = async (url: string) => {
+    const token = getBlobToken();
+    if (!token) return;
+
     try {
-        const token = getBlobToken();
-        if (!token) return;
-
-        // 1. Xóa thực thể trên Cloud
-        await del(url, { token: token });
-
-        // 2. Cập nhật Registry
-        const currentList = await listCloudReports();
-        const updated = currentList.filter(item => item.url !== url);
-        
-        await put(REGISTRY_PATH, JSON.stringify(updated, null, 2), {
-            access: 'public',
-            contentType: 'application/json',
-            token: token,
-            addRandomSuffix: false
+        // Với xóa, Vercel Blob API cần DELETE method
+        await fetch(`https://blob.vercel-storage.com/delete`, {
+            method: 'POST', // Vercel dùng POST cho action delete
+            headers: {
+                'authorization': `Bearer ${token}`,
+                'content-type': 'application/json',
+                'x-api-version': '7'
+            },
+            body: JSON.stringify({ urls: [url] })
         });
 
-        localStorage.setItem('gemini_cloud_index_v1', JSON.stringify(updated));
+        // Cập nhật lại Registry
+        const currentList = await listCloudReports();
+        const updatedList = currentList.filter(item => item.url !== url);
+        await rawPut(REGISTRY_PATH, JSON.stringify(updatedList), 'application/json');
     } catch (e) {
-        console.error("Lỗi khi xóa file:", e);
+        console.error("Xóa thất bại:", e);
     }
 };
