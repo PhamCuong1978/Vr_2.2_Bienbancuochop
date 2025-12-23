@@ -1,5 +1,8 @@
 
-import { put, list, del } from '@vercel/blob';
+import { put, del } from '@vercel/blob';
+
+const REGISTRY_PATH = 'bien-ban/registry.json';
+const STORE_URL_CACHE_KEY = 'vercel_blob_store_url';
 
 /**
  * Hàm lấy Token từ biến môi trường
@@ -26,30 +29,79 @@ interface CloudFileItem {
 }
 
 /**
- * Hàm LẤY TOÀN BỘ danh sách tệp tin từ Cloud
- * Sử dụng SDK chính thức của Vercel để tránh lỗi CORS và Treo UI
+ * Kỹ thuật Discovery: Tìm Base URL của Store
+ */
+const getStoreBaseUrl = async (token: string): Promise<string | null> => {
+    // 1. Thử lấy từ cache
+    const cached = localStorage.getItem(STORE_URL_CACHE_KEY);
+    if (cached) return cached;
+
+    try {
+        // 2. Nếu không có, thực hiện một lệnh put nhỏ để lấy URL
+        const blob = await put('system/discovery.txt', 'discovery', {
+            access: 'public',
+            token: token,
+            addRandomSuffix: false
+        });
+        
+        // URL có dạng: https://[store-id].public.blob.vercel-storage.com/system/discovery.txt
+        const baseUrl = blob.url.split('/system/')[0];
+        localStorage.setItem(STORE_URL_CACHE_KEY, baseUrl);
+        return baseUrl;
+    } catch (e) {
+        console.error("Discovery failed:", e);
+        return null;
+    }
+};
+
+/**
+ * Hàm LẤY danh sách từ Sổ cái Registry (Vượt lỗi CORS)
  */
 export const listCloudReports = async (): Promise<CloudFileItem[]> => {
     try {
         const token = getBlobToken();
         if (!token) return [];
 
-        // Sử dụng hàm list() của SDK để lấy danh sách thực tế từ thư mục bien-ban/
-        const { blobs } = await list({
-            prefix: 'bien-ban/',
+        const baseUrl = await getStoreBaseUrl(token);
+        if (!baseUrl) return [];
+
+        // Đọc trực tiếp tệp registry.json bằng fetch (GET có CORS tốt)
+        // Thêm tham số t để tránh cache trình duyệt
+        const response = await fetch(`${baseUrl}/${REGISTRY_PATH}?t=${Date.now()}`);
+        
+        if (response.status === 404) return [];
+        if (!response.ok) throw new Error("Registry Error");
+
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        console.warn("Lấy danh sách từ Cloud thất bại, dùng Local Index làm backup.");
+        const local = localStorage.getItem('gemini_cloud_index_v1');
+        return local ? JSON.parse(local) : [];
+    }
+};
+
+/**
+ * Hàm CẬP NHẬT Sổ cái Registry
+ */
+const updateRegistry = async (token: string, newItem: CloudFileItem) => {
+    try {
+        const currentList = await listCloudReports();
+        // Lọc trùng và đưa item mới lên đầu
+        const filtered = currentList.filter(item => item.pathname !== newItem.pathname);
+        const updated = [newItem, ...filtered];
+
+        // Ghi đè tệp registry.json
+        await put(REGISTRY_PATH, JSON.stringify(updated, null, 2), {
+            access: 'public',
+            contentType: 'application/json',
             token: token,
+            addRandomSuffix: false // CỐ ĐỊNH URL ĐỂ FETCH
         });
-
-        // Chuyển đổi định dạng về CloudFileItem
-        return blobs.map(blob => ({
-            pathname: blob.pathname,
-            url: blob.url,
-            uploadedAt: blob.uploadedAt.toISOString()
-        })).sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-
-    } catch (e: any) {
-        console.error("Lỗi khi lấy danh sách từ Vercel Cloud:", e);
-        return [];
+        
+        localStorage.setItem('gemini_cloud_index_v1', JSON.stringify(updated));
+    } catch (e) {
+        console.error("Update registry failed:", e);
     }
 };
 
@@ -63,23 +115,24 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
     return null;
   }
 
-  // Tạo một Promise có giới hạn thời gian (Timeout) 15 giây để tránh treo UI
-  const uploadPromise = put(`bien-ban/${fileName}.html`, htmlContent, {
-    access: 'public',
-    contentType: 'text/html',
-    token: token,
-    addRandomSuffix: true, // Vercel khuyên dùng để tránh cache
-  });
-
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error("Quá thời gian phản hồi từ máy chủ (15s).")), 15000)
-  );
-
   try {
-    // Chạy đua giữa việc Upload và Timeout
-    const blob: any = await Promise.race([uploadPromise, timeoutPromise]);
+    // 1. Upload tệp HTML
+    const pathname = `bien-ban/${fileName}.html`;
+    const blob = await put(pathname, htmlContent, {
+      access: 'public',
+      contentType: 'text/html',
+      token: token,
+      addRandomSuffix: true
+    });
     
-    alert("✅ Đã lưu lên Cloud thành công!");
+    // 2. Cập nhật Registry
+    await updateRegistry(token, {
+        pathname: pathname,
+        url: blob.url,
+        uploadedAt: new Date().toISOString()
+    });
+    
+    alert("✅ Đã lưu lên Cloud và đồng bộ thành công!");
     return blob.url;
   } catch (error: any) {
     console.error("Lỗi khi lưu vào Vercel Blob:", error);
@@ -89,17 +142,29 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
 };
 
 /**
- * Hàm xóa tệp tin trên Cloud (Xóa thực thể)
+ * Hàm xóa tệp tin (Xóa trong Registry và Cloud)
  */
 export const deleteCloudReport = async (url: string) => {
     try {
         const token = getBlobToken();
         if (!token) return;
 
-        // Xóa trực tiếp file trên Vercel Blob bằng URL
+        // 1. Xóa thực thể trên Cloud
         await del(url, { token: token });
-        console.log("Đã xóa file trên Cloud:", url);
+
+        // 2. Cập nhật Registry
+        const currentList = await listCloudReports();
+        const updated = currentList.filter(item => item.url !== url);
+        
+        await put(REGISTRY_PATH, JSON.stringify(updated, null, 2), {
+            access: 'public',
+            contentType: 'application/json',
+            token: token,
+            addRandomSuffix: false
+        });
+
+        localStorage.setItem('gemini_cloud_index_v1', JSON.stringify(updated));
     } catch (e) {
-        console.error("Lỗi khi xóa file trên Cloud:", e);
+        console.error("Lỗi khi xóa file:", e);
     }
 };
