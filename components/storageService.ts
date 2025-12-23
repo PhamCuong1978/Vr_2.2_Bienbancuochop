@@ -1,7 +1,7 @@
 
 import { put } from '@vercel/blob';
 
-const CLOUD_INDEX_KEY = 'gemini_cloud_index_v1';
+const INDEX_FILE_PATH = 'system/global_index.json';
 
 /**
  * Hàm lấy Token từ biến môi trường
@@ -19,21 +19,70 @@ const getBlobToken = () => {
 };
 
 /**
- * Hàm lưu vết tệp tin vào bộ nhớ trình duyệt (Local Index)
+ * Cấu trúc tệp Index lưu trên Cloud
  */
-const addToCloudIndex = (name: string, url: string) => {
+interface CloudFileItem {
+    pathname: string;
+    url: string;
+    uploadedAt: string;
+}
+
+/**
+ * Hàm ĐỌC danh sách từ tệp Index trên Cloud (Global)
+ */
+export const listCloudReports = async (): Promise<CloudFileItem[]> => {
     try {
-        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
-        const index = raw ? JSON.parse(raw) : [];
-        const newItem = {
-            pathname: `bien-ban/${name}.html`,
-            url: url,
-            uploadedAt: new Date().toISOString()
-        };
-        // Thêm vào đầu danh sách
-        localStorage.setItem(CLOUD_INDEX_KEY, JSON.stringify([newItem, ...index]));
+        const token = getBlobToken();
+        if (!token) return [];
+
+        // Chúng ta lấy danh sách bằng cách đọc tệp index.json công khai
+        // Để tránh cache của trình duyệt, chúng ta thêm tham số t ngẫu nhiên
+        const response = await fetch(`https://v0.blob.vercel-storage.com/${INDEX_FILE_PATH}?t=${Date.now()}`);
+        
+        if (response.status === 404) {
+            console.log("Chưa có tệp Index trên Cloud, khởi tạo danh sách trống.");
+            return [];
+        }
+
+        if (!response.ok) throw new Error("Không thể đọc danh sách từ Cloud.");
+        
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
     } catch (e) {
-        console.error("Không thể cập nhật Cloud Index:", e);
+        console.error("Lỗi khi tải Global Index:", e);
+        // Fallback về localStorage nếu Cloud lỗi
+        const localRaw = localStorage.getItem('gemini_cloud_index_v1');
+        return localRaw ? JSON.parse(localRaw) : [];
+    }
+};
+
+/**
+ * Hàm CẬP NHẬT danh sách Index trên Cloud
+ */
+const updateGlobalCloudIndex = async (newItem: CloudFileItem) => {
+    try {
+        const token = getBlobToken();
+        if (!token) return;
+
+        // 1. Lấy danh sách hiện tại
+        const currentList = await listCloudReports();
+        
+        // 2. Thêm mục mới vào đầu (tránh trùng lặp URL)
+        const filteredList = currentList.filter(item => item.url !== newItem.url);
+        const updatedList = [newItem, ...filteredList];
+
+        // 3. Ghi đè tệp index.json lên Cloud
+        await put(INDEX_FILE_PATH, JSON.stringify(updatedList, null, 2), {
+            access: 'public',
+            contentType: 'application/json',
+            token: token,
+            addRandomSuffix: false, // Giữ cố định tên tệp index
+        });
+        
+        // Cập nhật thêm vào Local để backup
+        localStorage.setItem('gemini_cloud_index_v1', JSON.stringify(updatedList));
+    } catch (e) {
+        console.error("Lỗi khi cập nhật Global Index:", e);
     }
 };
 
@@ -48,17 +97,23 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
       return null;
     }
 
-    // Upload tệp lên Vercel
+    // 1. Upload tệp biên bản HTML lên Vercel
     const blob = await put(`bien-ban/${fileName}.html`, htmlContent, {
       access: 'public',
       contentType: 'text/html',
       token: token,
     });
     
-    // Lưu vết vào Local Index để hiển thị trong tab Cloud Storage
-    addToCloudIndex(fileName, blob.url);
+    // 2. Cập nhật vào "Sổ cái" Global trên Cloud
+    const newItem = {
+        pathname: `bien-ban/${fileName}.html`,
+        url: blob.url,
+        uploadedAt: new Date().toISOString()
+    };
     
-    alert("✅ Đã lưu lên Cloud thành công!");
+    await updateGlobalCloudIndex(newItem);
+    
+    alert("✅ Đã lưu lên Cloud và đồng bộ Sổ cái thành công!");
     return blob.url;
   } catch (error: any) {
     console.error("Lỗi khi lưu vào Vercel Blob:", error);
@@ -68,27 +123,24 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
 };
 
 /**
- * Hàm lấy danh sách tệp từ Local Index (Vì API List bị Vercel chặn CORS trên Client)
- */
-export const listCloudReports = async () => {
-    try {
-        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
-        return raw ? JSON.parse(raw) : [];
-    } catch (e) {
-        return [];
-    }
-};
-
-/**
- * Hàm xóa vết tệp tin trong Local Index
+ * Hàm xóa vết tệp tin (Chỉ xóa trong Sổ cái)
  */
 export const deleteCloudReport = async (url: string) => {
     try {
-        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
-        if (!raw) return;
-        const index = JSON.parse(raw);
-        const newIndex = index.filter((item: any) => item.url !== url);
-        localStorage.setItem(CLOUD_INDEX_KEY, JSON.stringify(newIndex));
+        const token = getBlobToken();
+        if (!token) return;
+
+        const currentList = await listCloudReports();
+        const updatedList = currentList.filter(item => item.url !== url);
+
+        await put(INDEX_FILE_PATH, JSON.stringify(updatedList, null, 2), {
+            access: 'public',
+            contentType: 'application/json',
+            token: token,
+            addRandomSuffix: false,
+        });
+
+        localStorage.setItem('gemini_cloud_index_v1', JSON.stringify(updatedList));
     } catch (e) {
         console.error("Lỗi khi xóa vết Cloud Index:", e);
     }
