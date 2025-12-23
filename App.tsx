@@ -275,6 +275,38 @@ const App: React.FC = () => {
         }
         return false;
     }, [savedSessions, archivedSessions]);
+
+    const handleLoadCloudUrl = async (url: string) => {
+        setIsLoading(true);
+        setStatusMessage("Đang nạp lại biên bản từ Cloud...");
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error("Không thể tải tệp từ Cloud.");
+            const html = await response.text();
+            
+            const details = parseMeetingDetailsFromHtml(html);
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = html;
+            // Trích xuất văn bản thô để AI có thể "Dùng lại" để sửa đổi
+            const text = tempDiv.innerText || tempDiv.textContent || "";
+
+            resetState();
+            setFinalTranscription(text); 
+            setMeetingMinutesHtml(html);
+            setLastMeetingDetails(details);
+            setFileQueue([]);
+            setActiveTab('file');
+            
+            // Cuộn lên đầu để người dùng thấy Tab File Upload đã được nạp dữ liệu
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            
+            alert("Đã nạp lại biên bản thành công! Anh có thể bắt đầu chỉnh sửa hoặc dùng Chat AI để thay đổi.");
+        } catch (err: any) {
+            setError("Lỗi khi nạp tệp từ Cloud: " + err.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
     
     const handlePreviewSession = (session: SavedSession) => { setPreviewSession(session); };
 
@@ -618,7 +650,7 @@ const App: React.FC = () => {
                         </div>
                     )}
                     {activeTab === 'history' && <SavedSessionsList sessions={savedSessions} onLoad={handleLoadSession} onDelete={handleDeleteSession} onArchive={handleArchiveSession} onPreview={handlePreviewSession} onImport={handleImportSession} disabled={isLoading} />}
-                    {activeTab === 'cloud' && <CloudStorage sessions={archivedSessions} onLoad={handleLoadSession} onDelete={handleDeleteArchivedSession} onPreview={handlePreviewSession} onImportDatabase={handleImportDatabase} disabled={isLoading} />}
+                    {activeTab === 'cloud' && <CloudStorage sessions={archivedSessions} onLoad={handleLoadSession} onLoadCloud={handleLoadCloudUrl} onDelete={handleDeleteArchivedSession} onPreview={handlePreviewSession} onImportDatabase={handleImportDatabase} disabled={isLoading} />}
                 </div>
 
                 {finalTranscription && (

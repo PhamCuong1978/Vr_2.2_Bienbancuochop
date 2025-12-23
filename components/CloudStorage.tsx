@@ -1,19 +1,20 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { SavedSession } from '../App';
-import { TrashIcon, EyeIcon, DownloadIcon, UploadCloudIcon, DownloadCloudIcon, CloudIcon, RefreshIcon } from './icons';
+import { TrashIcon, EyeIcon, DownloadIcon, UploadCloudIcon, DownloadCloudIcon, CloudIcon, RefreshIcon, ArrowUturnLeftIcon } from './icons';
 import { listCloudReports, deleteCloudReport } from './storageService';
 
 interface CloudStorageProps {
     sessions: SavedSession[];
     onLoad: (sessionId: string) => void;
+    onLoadCloud?: (url: string) => void;
     onDelete: (sessionId: string) => void;
     onPreview: (session: SavedSession) => void;
     onImportDatabase: (file: File) => void;
     disabled: boolean;
 }
 
-const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete, onPreview, onImportDatabase, disabled }) => {
+const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onLoadCloud, onDelete, onPreview, onImportDatabase, disabled }) => {
     const dbInputRef = useRef<HTMLInputElement>(null);
     const [cloudFiles, setCloudFiles] = useState<any[]>([]);
     const [isLoadingCloud, setIsLoadingCloud] = useState(false);
@@ -127,6 +128,16 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
                                     </p>
                                 </div>
                                 <div className="flex items-center gap-1">
+                                    {onLoadCloud && (
+                                        <button 
+                                            onClick={() => onLoadCloud(file.url)} 
+                                            disabled={disabled}
+                                            className="p-1.5 bg-purple-900/30 text-purple-400 hover:bg-purple-600 hover:text-white rounded transition-all disabled:opacity-30" 
+                                            title="Nạp lại (Dùng lại biên bản này)"
+                                        >
+                                            <ArrowUturnLeftIcon className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
                                     <a href={file.url} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-cyan-900/30 text-cyan-400 hover:bg-cyan-600 hover:text-white rounded transition-all" title="Xem trực tuyến">
                                         <EyeIcon className="w-3.5 h-3.5" />
                                     </a>
