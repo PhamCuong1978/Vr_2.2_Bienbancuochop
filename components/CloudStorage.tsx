@@ -47,7 +47,7 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
     };
 
     const handleDeleteCloudItem = async (url: string) => {
-        if (window.confirm("Xóa vết lưu này khỏi danh sách? (Tệp tin gốc trên Vercel sẽ không bị xóa, anh cần vào Dashboard Vercel để xóa tệp gốc)")) {
+        if (window.confirm("Xóa vết lưu này khỏi danh sách? (Tệp tin gốc trên Vercel sẽ không bị xóa, anh cần tự truy cập hệ thống lưu trữ để xóa tệp gốc)")) {
             await deleteCloudReport(url);
             fetchCloudFiles();
         }
@@ -66,10 +66,6 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-    };
-
-    const handleOpenVercelDashboard = () => {
-        window.open('https://vercel.com/dashboard', '_blank');
     };
 
     return (
@@ -99,7 +95,7 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
                 </div>
             </div>
 
-            {/* Section 2: VERCEL CLOB INDEX */}
+            {/* Section 2: VERCEL CLOUD INDEX */}
             <div className="space-y-4">
                 <div className="flex justify-between items-center pb-2 border-b border-gray-700">
                     <div className="flex items-center gap-2">
@@ -107,12 +103,6 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
                         <h3 className="text-cyan-400 font-bold text-sm uppercase tracking-wide">Chỉ mục tệp trên Cloud</h3>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button 
-                            onClick={handleOpenVercelDashboard}
-                            className="text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded border border-gray-600 transition-colors"
-                        >
-                            Mở Vercel Dashboard ↗
-                        </button>
                         <button onClick={fetchCloudFiles} className="p-1 hover:bg-gray-700 rounded text-gray-400 transition-colors">
                             <RefreshIcon className={`w-4 h-4 ${isLoadingCloud ? 'animate-spin' : ''}`} />
                         </button>
