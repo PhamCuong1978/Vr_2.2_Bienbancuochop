@@ -1,9 +1,10 @@
 
-import { put, list, del } from '@vercel/blob';
+import { put } from '@vercel/blob';
+
+const CLOUD_INDEX_KEY = 'gemini_cloud_index_v1';
 
 /**
- * Hàm lấy Token từ biến môi trường một cách an toàn.
- * Ưu tiên tiền tố VITE_ để hoạt động trên môi trường Client-side của Vercel.
+ * Hàm lấy Token từ biến môi trường
  */
 const getBlobToken = () => {
   // @ts-ignore
@@ -11,12 +12,29 @@ const getBlobToken = () => {
   // @ts-ignore
   const proc = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-  const token = env.VITE_BLOB_READ_WRITE_TOKEN || 
-                proc.VITE_BLOB_READ_WRITE_TOKEN || 
-                env.BLOB_READ_WRITE_TOKEN || 
-                proc.BLOB_READ_WRITE_TOKEN;
-  
-  return token;
+  return env.VITE_BLOB_READ_WRITE_TOKEN || 
+         proc.VITE_BLOB_READ_WRITE_TOKEN || 
+         env.BLOB_READ_WRITE_TOKEN || 
+         proc.BLOB_READ_WRITE_TOKEN;
+};
+
+/**
+ * Hàm lưu vết tệp tin vào bộ nhớ trình duyệt (Local Index)
+ */
+const addToCloudIndex = (name: string, url: string) => {
+    try {
+        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
+        const index = raw ? JSON.parse(raw) : [];
+        const newItem = {
+            pathname: `bien-ban/${name}.html`,
+            url: url,
+            uploadedAt: new Date().toISOString()
+        };
+        // Thêm vào đầu danh sách
+        localStorage.setItem(CLOUD_INDEX_KEY, JSON.stringify([newItem, ...index]));
+    } catch (e) {
+        console.error("Không thể cập nhật Cloud Index:", e);
+    }
 };
 
 /**
@@ -26,64 +44,52 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
   try {
     const token = getBlobToken();
     if (!token) {
-      alert("THIẾU TOKEN: Anh Cường hãy thêm VITE_BLOB_READ_WRITE_TOKEN vào Vercel Settings.");
+      alert("THIẾU TOKEN: Anh Cường hãy kiểm tra lại cấu hình VITE_BLOB_READ_WRITE_TOKEN.");
       return null;
     }
 
+    // Upload tệp lên Vercel
     const blob = await put(`bien-ban/${fileName}.html`, htmlContent, {
       access: 'public',
       contentType: 'text/html',
       token: token,
     });
     
+    // Lưu vết vào Local Index để hiển thị trong tab Cloud Storage
+    addToCloudIndex(fileName, blob.url);
+    
+    alert("✅ Đã lưu lên Cloud thành công!");
     return blob.url;
   } catch (error: any) {
     console.error("Lỗi khi lưu vào Vercel Blob:", error);
-    alert(`Lỗi khi lưu: ${error.message}`);
+    alert(`Lỗi hệ thống: ${error.message}`);
     return null;
   }
 };
 
 /**
- * Hàm lấy danh sách các tệp tin đã lưu trên Vercel Blob
+ * Hàm lấy danh sách tệp từ Local Index (Vì API List bị Vercel chặn CORS trên Client)
  */
 export const listCloudReports = async () => {
-  try {
-    const token = getBlobToken();
-    if (!token) {
-        console.warn("listCloudReports: No token found");
+    try {
+        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch (e) {
         return [];
     }
-
-    console.log("Đang gọi API Vercel để lấy danh sách file...");
-    const response = await list({
-      prefix: 'bien-ban/',
-      token: token,
-    });
-    
-    // Đảm bảo trả về mảng blobs, nếu không có thì trả về mảng rỗng
-    return response.blobs || [];
-  } catch (error: any) {
-    console.error("Lỗi chi tiết khi lấy danh sách tệp Cloud:", error);
-    // Nếu lỗi do Token hoặc quyền, thông báo nhẹ cho người dùng
-    if (error.message && error.message.includes("403")) {
-        console.error("Lỗi 403: Có thể Token không có quyền List hoặc sai Project.");
-    }
-    return [];
-  }
 };
 
 /**
- * Hàm xóa tệp tin trên Vercel Blob
+ * Hàm xóa vết tệp tin trong Local Index
  */
 export const deleteCloudReport = async (url: string) => {
-  try {
-    const token = getBlobToken();
-    if (!token) return;
-
-    await del(url, { token: token });
-  } catch (error) {
-    console.error("Lỗi khi xóa tệp Cloud:", error);
-    throw error;
-  }
+    try {
+        const raw = localStorage.getItem(CLOUD_INDEX_KEY);
+        if (!raw) return;
+        const index = JSON.parse(raw);
+        const newIndex = index.filter((item: any) => item.url !== url);
+        localStorage.setItem(CLOUD_INDEX_KEY, JSON.stringify(newIndex));
+    } catch (e) {
+        console.error("Lỗi khi xóa vết Cloud Index:", e);
+    }
 };
