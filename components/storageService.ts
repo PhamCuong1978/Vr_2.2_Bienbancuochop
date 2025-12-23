@@ -3,7 +3,7 @@ import { put, list, del } from '@vercel/blob';
 
 /**
  * Hàm lấy Token từ biến môi trường một cách an toàn.
- * Lưu ý: Vite yêu cầu tiền tố VITE_ để biến có thể truy cập được từ trình duyệt.
+ * Ưu tiên tiền tố VITE_ để hoạt động trên môi trường Client-side của Vercel.
  */
 const getBlobToken = () => {
   // @ts-ignore
@@ -11,10 +11,12 @@ const getBlobToken = () => {
   // @ts-ignore
   const proc = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-  return env.VITE_BLOB_READ_WRITE_TOKEN || 
-         proc.VITE_BLOB_READ_WRITE_TOKEN || 
-         env.BLOB_READ_WRITE_TOKEN || 
-         proc.BLOB_READ_WRITE_TOKEN;
+  const token = env.VITE_BLOB_READ_WRITE_TOKEN || 
+                proc.VITE_BLOB_READ_WRITE_TOKEN || 
+                env.BLOB_READ_WRITE_TOKEN || 
+                proc.BLOB_READ_WRITE_TOKEN;
+  
+  return token;
 };
 
 /**
@@ -34,11 +36,10 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
       token: token,
     });
     
-    alert("✅ Đã lưu biên bản lên Cloud thành công!");
     return blob.url;
   } catch (error: any) {
     console.error("Lỗi khi lưu vào Vercel Blob:", error);
-    alert(`Lỗi hệ thống: ${error.message}`);
+    alert(`Lỗi khi lưu: ${error.message}`);
     return null;
   }
 };
@@ -49,16 +50,25 @@ export const saveReportToCloud = async (fileName: string, htmlContent: string) =
 export const listCloudReports = async () => {
   try {
     const token = getBlobToken();
-    if (!token) return [];
+    if (!token) {
+        console.warn("listCloudReports: No token found");
+        return [];
+    }
 
-    const { blobs } = await list({
+    console.log("Đang gọi API Vercel để lấy danh sách file...");
+    const response = await list({
       prefix: 'bien-ban/',
       token: token,
     });
     
-    return blobs;
-  } catch (error) {
-    console.error("Lỗi khi lấy danh sách tệp Cloud:", error);
+    // Đảm bảo trả về mảng blobs, nếu không có thì trả về mảng rỗng
+    return response.blobs || [];
+  } catch (error: any) {
+    console.error("Lỗi chi tiết khi lấy danh sách tệp Cloud:", error);
+    // Nếu lỗi do Token hoặc quyền, thông báo nhẹ cho người dùng
+    if (error.message && error.message.includes("403")) {
+        console.error("Lỗi 403: Có thể Token không có quyền List hoặc sai Project.");
+    }
     return [];
   }
 };
@@ -72,9 +82,8 @@ export const deleteCloudReport = async (url: string) => {
     if (!token) return;
 
     await del(url, { token: token });
-    alert("✅ Đã xóa tệp trên Cloud thành công!");
   } catch (error) {
     console.error("Lỗi khi xóa tệp Cloud:", error);
-    alert("Không thể xóa tệp trên Cloud.");
+    throw error;
   }
 };

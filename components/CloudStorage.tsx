@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { SavedSession } from '../App';
 import { TrashIcon, EyeIcon, DownloadIcon, UploadCloudIcon, DownloadCloudIcon, CloudIcon, RefreshIcon } from './icons';
 import { listCloudReports, deleteCloudReport } from './storageService';
@@ -17,17 +17,29 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
     const dbInputRef = useRef<HTMLInputElement>(null);
     const [cloudFiles, setCloudFiles] = useState<any[]>([]);
     const [isLoadingCloud, setIsLoadingCloud] = useState(false);
+    const [cloudError, setCloudError] = useState<string | null>(null);
 
-    const fetchCloudFiles = async () => {
+    const fetchCloudFiles = useCallback(async () => {
         setIsLoadingCloud(true);
-        const files = await listCloudReports();
-        setCloudFiles(files);
-        setIsLoadingCloud(false);
-    };
+        setCloudError(null);
+        try {
+            const files = await listCloudReports();
+            setCloudFiles(files || []);
+            if (!files || files.length === 0) {
+                console.log("Không tìm thấy tệp nào trên Cloud với tiền tố bien-ban/");
+            }
+        } catch (err: any) {
+            console.error("Component fetchCloudFiles error:", err);
+            setCloudError("Không thể kết nối với Vercel Cloud.");
+        } finally {
+            // Đảm bảo luôn dừng xoay vòng quay
+            setIsLoadingCloud(false);
+        }
+    }, []);
 
     useEffect(() => {
         fetchCloudFiles();
-    }, []);
+    }, [fetchCloudFiles]);
 
     const handleDownloadHtml = (session: SavedSession) => {
         const blob = new Blob([session.meetingMinutesHtml], { type: 'text/html;charset=utf-8' });
@@ -45,8 +57,13 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
 
     const handleDeleteCloudFile = async (url: string) => {
         if (window.confirm("Anh có chắc chắn muốn xóa tệp này vĩnh viễn trên Cloud không?")) {
-            await deleteCloudReport(url);
-            fetchCloudFiles();
+            try {
+                await deleteCloudReport(url);
+                alert("✅ Đã xóa tệp trên Cloud thành công!");
+                fetchCloudFiles();
+            } catch (e) {
+                alert("Lỗi khi xóa tệp.");
+            }
         }
     };
 
@@ -122,7 +139,8 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
                     </div>
                     <button 
                         onClick={fetchCloudFiles} 
-                        className="p-1 hover:bg-gray-700 rounded text-gray-400 transition-colors"
+                        disabled={isLoadingCloud}
+                        className={`p-1 hover:bg-gray-700 rounded text-gray-400 transition-colors ${isLoadingCloud ? 'cursor-not-allowed opacity-50' : ''}`}
                         title="Làm mới danh sách cloud"
                     >
                         <RefreshIcon className={`w-4 h-4 ${isLoadingCloud ? 'animate-spin' : ''}`} />
@@ -130,16 +148,23 @@ const CloudStorage: React.FC<CloudStorageProps> = ({ sessions, onLoad, onDelete,
                 </div>
 
                 {isLoadingCloud ? (
-                    <div className="text-center py-10 text-gray-500 text-sm animate-pulse">Đang tải danh sách từ Vercel Cloud...</div>
+                    <div className="text-center py-12 bg-gray-800/20 rounded-lg border border-gray-700/50">
+                        <div className="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                        <p className="text-gray-500 text-sm animate-pulse">Đang tải danh sách từ Vercel Cloud...</p>
+                    </div>
+                ) : cloudError ? (
+                    <div className="text-center py-8 bg-red-900/10 rounded-lg border border-red-900/30 text-red-400 text-xs">
+                        {cloudError} <button onClick={fetchCloudFiles} className="underline ml-2">Thử lại</button>
+                    </div>
                 ) : cloudFiles.length === 0 ? (
-                    <div className="text-center py-8 bg-gray-800/30 rounded-lg border border-dashed border-gray-700 text-gray-500 text-xs italic">
-                        Chưa có tệp nào được lưu trực tiếp lên Vercel Cloud.
+                    <div className="text-center py-10 bg-gray-800/30 rounded-lg border border-dashed border-gray-700 text-gray-500 text-xs italic">
+                        Không tìm thấy tệp nào trong thư mục "bien-ban/" trên Cloud.
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {cloudFiles.map((file) => (
                             <div key={file.url} className="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center group hover:border-blue-500/50 transition-colors shadow-sm">
-                                <div className="min-w-0">
+                                <div className="min-w-0 pr-2">
                                     <p className="text-sm font-medium text-gray-200 truncate" title={file.pathname}>
                                         {file.pathname.replace('bien-ban/', '')}
                                     </p>
